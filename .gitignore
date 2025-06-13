@@ -1,0 +1,269 @@
+# AI Reddit News Agent - .gitignore
+
+# ===================================
+# Environment Variables & Secrets
+# ===================================
+.env
+.env.local
+.env.production
+.env.staging
+.env.development
+*.env
+config.ini
+secrets.json
+credentials.json
+
+# ===================================
+# Python
+# ===================================
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# ===================================
+# Package Managers
+# ===================================
+# uv
+.uv-cache/
+
+# pip
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Poetry (if switching back)
+poetry.lock
+
+# ===================================
+# Virtual Environments
+# ===================================
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.virtualenv/
+
+# ===================================
+# IDEs and Editors
+# ===================================
+# VSCode
+.vscode/
+*.code-workspace
+
+# PyCharm
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+.vim/
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# ===================================
+# Operating System
+# ===================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msm
+*.msp
+*.lnk
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# ===================================
+# Application-Specific
+# ===================================
+# Generated Reports
+reports/
+output/
+generated_reports/
+*.md.generated
+reddit_reports/
+downloads/
+
+# Logs and Debugging
+logs/
+*.log
+*.log.*
+debug.log
+error.log
+api.log
+scraper.log
+reddit.log
+
+# Cache and Temporary Files
+cache/
+tmp/
+temp/
+.cache/
+*.tmp
+*.temp
+.scrapy/
+
+# Web Scraping Cache
+scraped_data/
+scraped_content/
+.requests-cache/
+*.cache
+
+# Reddit API Cache
+reddit_cache/
+praw_cache/
+.reddit_cache
+
+# AI/ML Related
+models/
+*.model
+*.pkl
+*.pickle
+embeddings/
+vectors/
+.transformers_cache/
+
+# Data Files
+data/
+datasets/
+raw_data/
+processed_data/
+*.csv
+*.json.bak
+*.jsonl
+
+# ===================================
+# Development and Testing
+# ===================================
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Profiling
+*.prof
+*.pstats
+
+# Documentation builds
+docs/_build/
+site/
+
+# ===================================
+# Docker
+# ===================================
+docker-compose.override.yml
+.dockerignore
+
+# ===================================
+# CI/CD
+# ===================================
+.github/workflows/secrets/
+
+# ===================================
+# Backup Files
+# ===================================
+*.bak
+*.backup
+*.old
+*.orig
+*~
+
+# ===================================
+# Large Files and Binaries
+# ===================================
+*.zip
+*.tar.gz
+*.rar
+*.7z
+*.dmg
+*.iso
+
+# ===================================
+# Project Specific Exclusions
+# ===================================
+# API Response Dumps
+api_responses/
+reddit_dumps/
+openai_responses/
+
+# User Generated Content
+uploads/
+user_data/
+session_data/
+
+# Performance Monitoring
+*.pid
+*.seed
+*.pid.lock
