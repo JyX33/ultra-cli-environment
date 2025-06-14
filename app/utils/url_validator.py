@@ -6,9 +6,9 @@ from typing import Optional, Set, Union
 from urllib.parse import urlparse
 
 # Configuration for URL validation
-ALLOWED_SCHEMES: Set[str] = {'http', 'https'}
-ALLOWED_PORTS: Set[int] = {80, 443, 8080, 8443}
-BLOCKED_PORTS: Set[int] = {
+ALLOWED_SCHEMES: set[str] = {'http', 'https'}
+ALLOWED_PORTS: set[int] = {80, 443, 8080, 8443}
+BLOCKED_PORTS: set[int] = {
     22,    # SSH
     23,    # Telnet
     25,    # SMTP

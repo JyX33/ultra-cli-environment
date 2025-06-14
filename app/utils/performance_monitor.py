@@ -1,11 +1,12 @@
 # ABOUTME: Performance monitoring utilities with benchmarking and regression detection
 # ABOUTME: Provides tools for tracking API calls, response times, memory usage, and automated performance gates
 
+from collections.abc import Generator
 from contextlib import contextmanager
 import statistics
 import threading
 import time
-from typing import Any, Dict, Generator, List, Optional
+from typing import Any, Dict, List, Optional
 
 import psutil
 

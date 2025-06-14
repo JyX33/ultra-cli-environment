@@ -1,9 +1,10 @@
 # ABOUTME: AI content summarization service using modern OpenAI API client with robust error handling
 # ABOUTME: Provides text summarization for Reddit posts and comments with retry logic and security
 
+from collections.abc import Generator
 import os
 import time
-from typing import Generator, Optional
+from typing import Optional
 
 from openai import OpenAI
 from openai._exceptions import (

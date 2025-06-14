@@ -87,9 +87,9 @@ def _remove_path_traversal(filename: str) -> str:
     traversal_patterns = [
         r'\.\.+',   # Multiple dots
         r'\.\./',   # Unix path traversal
-        r'\.\.\/', # Unix path traversal (escaped)
+        r'\.\.\/',  # Unix path traversal (escaped)
         r'\.\.\\',  # Windows path traversal
-        r'\.\.\\\\', # Windows path traversal (escaped)
+        r'\.\.\\\\',  # Windows path traversal (escaped)
         r'/',       # Forward slashes
         r'\\',      # Backslashes
     ]
