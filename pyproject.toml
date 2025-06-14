@@ -31,4 +31,6 @@ build-backend = "hatchling.build"
 dev = [
     "pytest>=8.4.0",
     "pytest-mock>=3.14.1",
+    "requests-mock>=1.12.1",
+    "psutil>=6.1.1",
 ]
