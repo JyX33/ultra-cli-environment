@@ -3,14 +3,15 @@
 
 import os
 import time
-from typing import Optional
+from typing import Generator, Optional
+
 from openai import OpenAI
 from openai._exceptions import (
-    APIError, 
-    RateLimitError, 
-    AuthenticationError, 
     APIConnectionError,
-    BadRequestError
+    APIError,
+    AuthenticationError,
+    BadRequestError,
+    RateLimitError,
 )
 
 
@@ -21,7 +22,7 @@ class SummarizerError(Exception):
 
 class SummarizerService:
     """Modern OpenAI-based content summarization service."""
-    
+
     def __init__(self, api_key: Optional[str] = None):
         """
         Initialize the summarizer service with modern OpenAI client.
@@ -34,24 +35,24 @@ class SummarizerService:
         """
         # Get API key from parameter or environment
         self.api_key = api_key or os.getenv('OPENAI_API_KEY')
-        
+
         if not self.api_key:
             raise ValueError("OpenAI API key is required. Set OPENAI_API_KEY environment variable.")
-        
+
         # Validate API key format
         if not self._is_valid_api_key_format(self.api_key):
             raise ValueError("Invalid OpenAI API key format. Key should start with 'sk-'.")
-        
+
         # Initialize modern OpenAI client
         self.client = OpenAI(api_key=self.api_key)
-        
+
         # Configuration
         self.model = "gpt-3.5-turbo"
         self.max_retries = 3
         self.base_delay = 1.0
         self.max_tokens = 150
         self.temperature = 0.7
-    
+
     def _is_valid_api_key_format(self, api_key: str) -> bool:
         """Validate API key format."""
         return (
@@ -59,7 +60,7 @@ class SummarizerService:
             api_key.startswith('sk-') and
             len(api_key) > 20  # Minimum reasonable length
         )
-    
+
     def summarize_content(self, content: str, prompt_type: str) -> str:
         """
         Summarize content using OpenAI API with modern client and robust error handling.
@@ -73,21 +74,21 @@ class SummarizerService:
         """
         if not content or not content.strip():
             return "No content available for summary."
-        
+
         if prompt_type not in ["post", "comments"]:
             return f"AI summary could not be generated: Invalid prompt type '{prompt_type}'."
-        
+
         # Prepare system prompt
         system_prompt = self._get_system_prompt(prompt_type)
-        
+
         # Truncate content if too long (rough token estimation: 1 token ≈ 4 characters)
         max_content_length = 4000 * 4  # ~4000 tokens for content
         if len(content) > max_content_length:
             content = content[:max_content_length] + "..."
-        
+
         # Attempt summarization with retry logic
         return self._summarize_with_retry(content, system_prompt)
-    
+
     def _get_system_prompt(self, prompt_type: str) -> str:
         """Get appropriate system prompt based on content type."""
         if prompt_type == "post":
@@ -96,7 +97,7 @@ class SummarizerService:
             return "Summarize the following Reddit comments, capturing the overall community sentiment and key discussion points."
         else:
             raise ValueError(f"Invalid prompt_type: {prompt_type}")
-    
+
     def _summarize_with_retry(self, content: str, system_prompt: str) -> str:
         """
         Attempt summarization with exponential backoff retry logic.
@@ -108,8 +109,8 @@ class SummarizerService:
         Returns:
             Summary text or error message
         """
-        last_exception = None
-        
+        last_exception: Optional[Exception] = None
+
         for attempt in range(self.max_retries):
             try:
                 response = self.client.chat.completions.create(
@@ -124,13 +125,13 @@ class SummarizerService:
                     frequency_penalty=0.0,
                     presence_penalty=0.0
                 )
-                
+
                 # Extract and validate response
                 if not response.choices or not response.choices[0].message.content:
                     return "AI summary could not be generated: Empty response received."
-                
+
                 return response.choices[0].message.content.strip()
-                
+
             except RateLimitError as e:
                 last_exception = e
                 if attempt < self.max_retries - 1:
@@ -138,11 +139,11 @@ class SummarizerService:
                     time.sleep(delay)
                     continue
                 return "AI summary could not be generated due to rate limits. Please try again later."
-                
-            except AuthenticationError as e:
+
+            except AuthenticationError:
                 # Don't retry authentication errors
                 return "AI summary could not be generated: Invalid API key."
-                
+
             except APIConnectionError as e:
                 last_exception = e
                 if attempt < self.max_retries - 1:
@@ -150,7 +151,7 @@ class SummarizerService:
                     time.sleep(delay)
                     continue
                 return "AI summary could not be generated: Connection failed."
-                
+
             except BadRequestError as e:
                 # Handle specific bad request cases
                 error_message = str(e).lower()
@@ -160,7 +161,7 @@ class SummarizerService:
                     return "AI summary could not be generated: Content too long."
                 else:
                     return "AI summary could not be generated: Invalid request."
-                    
+
             except APIError as e:
                 last_exception = e
                 if attempt < self.max_retries - 1:
@@ -168,16 +169,16 @@ class SummarizerService:
                     time.sleep(delay)
                     continue
                 return "AI summary could not be generated: API error occurred."
-                
+
             except Exception as e:
                 # Catch any other unexpected errors
                 last_exception = e
                 return "AI summary could not be generated: Unexpected error occurred."
-        
+
         # If we get here, all retries failed
         return f"AI summary could not be generated after {self.max_retries} attempts."
-    
-    def summarize_content_stream(self, content: str, prompt_type: str):
+
+    def summarize_content_stream(self, content: str, prompt_type: str) -> Generator[str, None, None]:
         """
         Stream summarization response for large content (future feature).
         

@@ -2,9 +2,8 @@
 # ABOUTME: Validates schemes, IP ranges, ports and URL format for security
 
 import ipaddress
+from typing import Optional, Set, Union
 from urllib.parse import urlparse
-from typing import Optional, Set
-
 
 # Configuration for URL validation
 ALLOWED_SCHEMES: Set[str] = {'http', 'https'}
@@ -103,42 +102,42 @@ def _validate_url_internal(url: Optional[str]) -> None:
     """
     if not url:
         raise URLValidationError("Invalid URL format")
-    
+
     if not isinstance(url, str):
         raise URLValidationError("Invalid URL format")
-    
+
     # Prevent resource exhaustion with overly long URLs
     if len(url) > 2048:
         raise URLValidationError("Invalid URL format")
-    
+
     try:
         parsed = urlparse(url)
     except Exception:
         raise URLValidationError("Invalid URL format")
-    
+
     # Check for HTTP header injection patterns in URL
     if '\n' in url or '\r' in url or '%0a' in url.lower() or '%0d' in url.lower():
         raise URLValidationError("Invalid URL format")
-    
+
     # Validate scheme first (case-insensitive)
     scheme = parsed.scheme.lower() if parsed.scheme else ""
     if scheme not in ALLOWED_SCHEMES:
         raise URLValidationError("Only HTTP and HTTPS schemes are allowed")
-    
+
     # Check for required components after scheme validation
     if not parsed.netloc:
         raise URLValidationError("Invalid URL format")
-    
+
     # Extract hostname and port with error handling
     try:
         hostname = parsed.hostname
         port = parsed.port
     except ValueError:
         raise URLValidationError("Invalid URL format")
-    
+
     if not hostname:
         raise URLValidationError("Invalid URL format")
-    
+
     # Check for IP address (including various representations)
     resolved_ip = _resolve_hostname_to_ip(hostname)
     if resolved_ip:
@@ -146,13 +145,13 @@ def _validate_url_internal(url: Optional[str]) -> None:
     else:
         # Not an IP address, check if it's a hostname that might resolve to internal IPs
         _validate_hostname(hostname)
-    
+
     # Validate port if specified
     if port is not None:
         _validate_port(port)
 
 
-def _resolve_hostname_to_ip(hostname: str) -> Optional[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+def _resolve_hostname_to_ip(hostname: str) -> Optional[Union[ipaddress.IPv4Address, ipaddress.IPv6Address]]:
     """
     Try to resolve hostname to IP address, handling various obfuscation techniques.
     
@@ -167,7 +166,7 @@ def _resolve_hostname_to_ip(hostname: str) -> Optional[ipaddress.IPv4Address | i
         return ipaddress.ip_address(hostname)
     except ValueError:
         pass
-    
+
     # Check for decimal representation (e.g., 2130706433 for 127.0.0.1)
     try:
         if hostname.isdigit():
@@ -177,7 +176,7 @@ def _resolve_hostname_to_ip(hostname: str) -> Optional[ipaddress.IPv4Address | i
                 return ipaddress.IPv4Address(decimal_value)
     except (ValueError, ipaddress.AddressValueError):
         pass
-    
+
     # Check for hexadecimal representation (e.g., 0x7f000001 for 127.0.0.1)
     try:
         if hostname.lower().startswith('0x'):
@@ -186,7 +185,7 @@ def _resolve_hostname_to_ip(hostname: str) -> Optional[ipaddress.IPv4Address | i
                 return ipaddress.IPv4Address(hex_value)
     except (ValueError, ipaddress.AddressValueError):
         pass
-    
+
     # Check for octal representation (e.g., 017700000001 for 127.0.0.1)
     try:
         if hostname.startswith('0') and len(hostname) > 1 and hostname.isdigit():
@@ -195,7 +194,7 @@ def _resolve_hostname_to_ip(hostname: str) -> Optional[ipaddress.IPv4Address | i
                 return ipaddress.IPv4Address(octal_value)
     except (ValueError, ipaddress.AddressValueError):
         pass
-    
+
     # Check for short IP formats (e.g., 127.1 for 127.0.0.1)
     try:
         parts = hostname.split('.')
@@ -207,11 +206,11 @@ def _resolve_hostname_to_ip(hostname: str) -> Optional[ipaddress.IPv4Address | i
             return ipaddress.IPv4Address(full_ip)
     except (ValueError, ipaddress.AddressValueError):
         pass
-    
+
     return None
 
 
-def _validate_ip_address(ip_addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> None:
+def _validate_ip_address(ip_addr: Union[ipaddress.IPv4Address, ipaddress.IPv6Address]) -> None:
     """
     Validate that an IP address is not internal/private.
     
@@ -224,29 +223,29 @@ def _validate_ip_address(ip_addr: ipaddress.IPv4Address | ipaddress.IPv6Address)
     # Check for localhost
     if ip_addr.is_loopback:
         raise URLValidationError("Internal network access not allowed")
-    
+
     # Check for private networks
     if ip_addr.is_private:
         raise URLValidationError("Internal network access not allowed")
-    
+
     # Check for link-local addresses
     if ip_addr.is_link_local:
         raise URLValidationError("Internal network access not allowed")
-    
+
     # Check for multicast addresses
     if ip_addr.is_multicast:
         raise URLValidationError("Internal network access not allowed")
-    
+
     # Check for reserved addresses
     if ip_addr.is_reserved:
         raise URLValidationError("Internal network access not allowed")
-    
+
     # Additional checks for IPv4
     if isinstance(ip_addr, ipaddress.IPv4Address):
         # Check for broadcast address
         if str(ip_addr) == '255.255.255.255':
             raise URLValidationError("Internal network access not allowed")
-        
+
         # Check for any address (0.0.0.0)
         if str(ip_addr) == '0.0.0.0':
             raise URLValidationError("Internal network access not allowed")
@@ -263,17 +262,17 @@ def _validate_hostname(hostname: str) -> None:
         URLValidationError: If the hostname poses a security risk
     """
     hostname_lower = hostname.lower()
-    
+
     # Block localhost variations
     localhost_variations = [
         'localhost',
         'localhost.localdomain',
         '0', '0.0', '0.0.0', '0.0.0.0'
     ]
-    
+
     if hostname_lower in localhost_variations:
         raise URLValidationError("Internal network access not allowed")
-    
+
     # Block common internal hostnames
     internal_hostnames = [
         'metadata.google.internal',
@@ -282,7 +281,7 @@ def _validate_hostname(hostname: str) -> None:
         'consul',
         'vault'
     ]
-    
+
     if hostname_lower in internal_hostnames:
         raise URLValidationError("Internal network access not allowed")
 
@@ -300,11 +299,11 @@ def _validate_port(port: int) -> None:
     # Check if port is explicitly blocked
     if port in BLOCKED_PORTS:
         raise URLValidationError(f"Port {port} is not allowed (commonly used for internal services)")
-    
+
     # Block ports below 1024 except for allowed web ports
     if port < 1024 and port not in ALLOWED_PORTS:
         raise URLValidationError(f"Port {port} is not allowed (privileged port)")
-    
+
     # Block invalid port ranges
     if port > 65535 or port < 1:
         raise URLValidationError(f"Port {port} is not allowed (invalid port range)")
