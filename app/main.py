@@ -1,19 +1,59 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 import io
+import re
 from typing import List, Dict, Any
 
 from app.services.reddit_service import RedditService
 from app.services.summarizer_service import summarize_content
-from app.utils.relevance import score_and_rank_subreddits
+from app.utils.relevance import score_and_rank_subreddits_concurrent
 from app.utils.report_generator import create_markdown_report
-import sys
-import os
-sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
+from app.utils.filename_sanitizer import generate_safe_filename
+from app.utils.comment_processor import get_comments_summary_stream
 from app.services.scraper_service import scrape_article_text
 
 app = FastAPI(title="AI Reddit News Agent", description="Automated Reddit content analysis and reporting")
 reddit_service = RedditService()
+
+
+def validate_input_string(input_str: str, param_name: str) -> str:
+    """
+    Validate input string to prevent injection attacks.
+    
+    Args:
+        input_str: The input string to validate
+        param_name: Name of the parameter for error messages
+        
+    Returns:
+        The validated input string
+        
+    Raises:
+        HTTPException: If input contains malicious patterns
+    """
+    if not input_str or not isinstance(input_str, str):
+        raise HTTPException(status_code=422, detail=f"Invalid {param_name}: must be a non-empty string")
+    
+    # Check for common injection patterns
+    dangerous_patterns = [
+        r"[<>\"'`]",  # HTML/JS injection
+        r"(?i)(script|javascript|vbscript)",  # Script injection
+        r"(?i)(drop|delete|insert|update|select|union|exec|execute)",  # SQL injection
+        r"(?i)(file|ftp|http|https|ldap|gopher)://",  # Protocol injection
+        r"(?i)(\$\{|\{\{|%\{)",  # Template injection
+        r"\.\.+[/\\]",  # Path traversal
+        r"(?i)(etc/passwd|/etc/shadow|proc/self)",  # System file access
+        r"[;&|`$()]",  # Command injection
+    ]
+    
+    for pattern in dangerous_patterns:
+        if re.search(pattern, input_str):
+            raise HTTPException(status_code=422, detail=f"Invalid {param_name}: contains potentially malicious content")
+    
+    # Length validation
+    if len(input_str) > 100:
+        raise HTTPException(status_code=422, detail=f"Invalid {param_name}: too long (max 100 characters)")
+    
+    return input_str.strip()
 
 
 @app.get("/discover-subreddits/{topic}")
@@ -28,14 +68,16 @@ async def discover_subreddits(topic: str) -> List[Dict[str, Any]]:
         List of top 3 relevant subreddits with relevance scores
     """
     try:
+        # Validate input to prevent injection attacks
+        topic = validate_input_string(topic, "topic")
         # Search for subreddits related to the topic
         subreddits = reddit_service.search_subreddits(topic)
         
         if not subreddits:
             raise HTTPException(status_code=404, detail=f"No subreddits found for topic: {topic}")
         
-        # Score and rank subreddits by relevance
-        scored_subreddits = score_and_rank_subreddits(subreddits, topic, reddit_service)
+        # Score and rank subreddits by relevance using concurrent processing
+        scored_subreddits = score_and_rank_subreddits_concurrent(subreddits, topic, reddit_service)
         
         if not scored_subreddits:
             raise HTTPException(status_code=404, detail=f"No relevant subreddits found for topic: {topic}")
@@ -46,7 +88,8 @@ async def discover_subreddits(topic: str) -> List[Dict[str, Any]]:
     except Exception as e:
         if isinstance(e, HTTPException):
             raise e
-        raise HTTPException(status_code=500, detail=f"Error discovering subreddits: {str(e)}")
+        # Don't expose internal error details
+        raise HTTPException(status_code=500, detail="Error processing request")
 
 
 @app.get("/generate-report/{subreddit}/{topic}")
@@ -62,8 +105,11 @@ async def generate_report(subreddit: str, topic: str):
         StreamingResponse with downloadable Markdown report
     """
     try:
-        # Get relevant posts from the subreddit
-        posts = reddit_service.get_relevant_posts(subreddit)
+        # Validate inputs to prevent injection attacks
+        subreddit = validate_input_string(subreddit, "subreddit")
+        topic = validate_input_string(topic, "topic")
+        # Get relevant posts from the subreddit using optimized API calls
+        posts = reddit_service.get_relevant_posts_optimized(subreddit)
         
         if not posts:
             raise HTTPException(
@@ -91,10 +137,9 @@ async def generate_report(subreddit: str, topic: str):
             # Generate post summary
             post_summary = summarize_content(content, "post")
             
-            # Get top comments and generate comments summary
-            comments = reddit_service.get_top_comments(post.id, limit=10)
-            comments_text = " ".join([comment.body for comment in comments if hasattr(comment, 'body')])
-            comments_summary = summarize_content(comments_text, "comments") if comments_text else "No comments available for summary."
+            # Get top comments using memory-efficient streaming processing
+            comments_text = get_comments_summary_stream(post.id, reddit_service, max_memory_mb=10, top_count=10)
+            comments_summary = summarize_content(comments_text, "comments") if comments_text != "No comments available for summary." else "No comments available for summary."
             
             # Add to report data
             report_data.append({
@@ -107,9 +152,9 @@ async def generate_report(subreddit: str, topic: str):
         # Generate the Markdown report
         markdown_report = create_markdown_report(report_data, subreddit, topic)
         
-        # Create a downloadable file response
+        # Create a downloadable file response with secure filename
         file_buffer = io.StringIO(markdown_report)
-        filename = f"reddit_report_{subreddit}_{topic.replace(' ', '_')}.md"
+        filename = generate_safe_filename(subreddit, topic)
         
         return StreamingResponse(
             io.BytesIO(markdown_report.encode('utf-8')),
@@ -120,7 +165,8 @@ async def generate_report(subreddit: str, topic: str):
     except Exception as e:
         if isinstance(e, HTTPException):
             raise e
-        raise HTTPException(status_code=500, detail=f"Error generating report: {str(e)}")
+        # Don't expose internal error details
+        raise HTTPException(status_code=500, detail="Error processing request")
 
 
 @app.get("/")

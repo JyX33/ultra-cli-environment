@@ -94,6 +94,9 @@ venv.bak/
 *.ipr
 *.iws
 
+# Claude Code
+.claude/
+
 # Sublime Text
 *.sublime-project
 *.sublime-workspace
