@@ -43,7 +43,7 @@ dev = [
 # MyPy Configuration
 # ===================================
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
@@ -78,7 +78,7 @@ ignore_missing_imports = true
 # Ruff Configuration
 # ===================================
 [tool.ruff]
-target-version = "py39"
+target-version = "py312"
 line-length = 88
 indent-width = 4
 

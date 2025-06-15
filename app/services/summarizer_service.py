@@ -48,7 +48,7 @@ class SummarizerService:
         self.client = OpenAI(api_key=self.api_key)
 
         # Configuration
-        self.model = "gpt-3.5-turbo"
+        self.model = "gpt-4o"
         self.max_retries = 3
         self.base_delay = 1.0
         self.max_tokens = 150

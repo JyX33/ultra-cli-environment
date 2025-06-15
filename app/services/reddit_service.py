@@ -1,11 +1,15 @@
 # ABOUTME: Reddit API service for fetching posts, comments, and subreddit data with PRAW
 # ABOUTME: Provides filtered content retrieval with media exclusion and relevance sorting
 
+import logging
 from typing import Any, List
 
 import praw
+from praw.exceptions import PRAWException
 
 from app.core.config import config
+
+logger = logging.getLogger(__name__)
 
 
 class RedditService:
@@ -13,11 +17,65 @@ class RedditService:
 
     def __init__(self) -> None:
         """Initialize the Reddit service with authenticated PRAW client."""
-        self.reddit = praw.Reddit(
-            client_id=config.REDDIT_CLIENT_ID,
-            client_secret=config.REDDIT_CLIENT_SECRET,
-            user_agent=config.REDDIT_USER_AGENT
-        )
+        # Validate environment variables
+        self._validate_config()
+        
+        logger.info("Initializing Reddit API client")
+        logger.debug(f"Reddit Client ID: {config.REDDIT_CLIENT_ID[:8]}..." if config.REDDIT_CLIENT_ID else "None")
+        logger.debug(f"Reddit User Agent: {config.REDDIT_USER_AGENT}")
+        
+        try:
+            self.reddit = praw.Reddit(
+                client_id=config.REDDIT_CLIENT_ID,
+                client_secret=config.REDDIT_CLIENT_SECRET,
+                user_agent=config.REDDIT_USER_AGENT
+            )
+            
+            # Test the connection
+            self._test_connection()
+            logger.info("Reddit API client initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize Reddit API client: {type(e).__name__}: {e}")
+            raise RuntimeError(f"Reddit API initialization failed: {e}") from e
+
+    def _validate_config(self) -> None:
+        """Validate that all required Reddit API configuration is present."""
+        missing_vars = []
+        
+        if not config.REDDIT_CLIENT_ID:
+            missing_vars.append("REDDIT_CLIENT_ID")
+        if not config.REDDIT_CLIENT_SECRET:
+            missing_vars.append("REDDIT_CLIENT_SECRET") 
+        if not config.REDDIT_USER_AGENT:
+            missing_vars.append("REDDIT_USER_AGENT")
+            
+        if missing_vars:
+            error_msg = f"Missing required Reddit API environment variables: {', '.join(missing_vars)}"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+            
+        logger.info("Reddit API configuration validation passed")
+
+    def _test_connection(self) -> None:
+        """Test the Reddit API connection by making a simple authenticated request."""
+        try:
+            # Test authentication by accessing read-only info
+            logger.info("Testing Reddit API connection...")
+            user = self.reddit.user.me()
+            
+            if user is None:
+                # This means we're using a script application (read-only), which is expected
+                logger.info("Reddit API connection successful (read-only script application)")
+            else:
+                logger.info(f"Reddit API connection successful (authenticated as: {user.name})")
+                
+        except PRAWException as e:
+            logger.error(f"Reddit API connection test failed: {type(e).__name__}: {e}")
+            raise RuntimeError(f"Reddit API authentication failed: {e}") from e
+        except Exception as e:
+            logger.error(f"Reddit API connection test failed with unexpected error: {type(e).__name__}: {e}")
+            raise RuntimeError(f"Reddit API connection failed: {e}") from e
 
     def search_subreddits(self, topic: str, limit: int = 10) -> list:
         """
@@ -43,8 +101,39 @@ class RedditService:
         Returns:
             list: List of hot post objects from the subreddit
         """
-        subreddit = self.reddit.subreddit(subreddit_name)
-        return list(subreddit.hot(limit=limit))
+        logger.debug(f"Fetching {limit} hot posts from r/{subreddit_name}")
+        
+        try:
+            subreddit = self.reddit.subreddit(subreddit_name)
+            
+            # Check if subreddit exists and is accessible
+            try:
+                subreddit_display_name = subreddit.display_name
+                logger.debug(f"Subreddit r/{subreddit_name} is accessible as r/{subreddit_display_name}")
+            except Exception as e:
+                logger.error(f"Cannot access subreddit r/{subreddit_name}: {type(e).__name__}: {e}")
+                return []
+            
+            # Fetch hot posts
+            hot_posts = list(subreddit.hot(limit=limit))
+            logger.debug(f"Successfully retrieved {len(hot_posts)} hot posts from r/{subreddit_name}")
+            
+            # Log sample post titles for debugging
+            if hot_posts:
+                logger.debug(f"Sample posts from r/{subreddit_name}:")
+                for i, post in enumerate(hot_posts[:3]):
+                    logger.debug(f"  {i+1}. '{post.title}'")
+            else:
+                logger.warning(f"No hot posts found in r/{subreddit_name}")
+                
+            return hot_posts
+            
+        except PRAWException as e:
+            logger.error(f"PRAW error getting hot posts from r/{subreddit_name}: {type(e).__name__}: {e}")
+            return []
+        except Exception as e:
+            logger.error(f"Unexpected error getting hot posts from r/{subreddit_name}: {type(e).__name__}: {e}")
+            return []
 
     def get_relevant_posts(self, subreddit_name: str) -> list:
         """
@@ -123,7 +212,7 @@ class RedditService:
         media_extensions = ('.jpg', '.jpeg', '.png', '.gif', '.mp4')
         media_domains = ('i.redd.it', 'v.redd.it', 'i.imgur.com')
 
-        valid_posts: List[Any] = []
+        valid_posts: list[Any] = []
 
         # Process posts with early termination for efficiency
         for post in posts:
