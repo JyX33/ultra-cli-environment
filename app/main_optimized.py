@@ -389,7 +389,9 @@ async def get_trending_posts_optimized(
                 time_window_hours=hours,
                 min_score=10
             )
-            performance_monitor.record_database_query(timer.duration * 1000)
+            # Safe access to timer.duration after the operation
+            query_time = timer.duration * 1000 if timer.duration is not None else 0
+            performance_monitor.record_database_query(query_time)
 
         # Cache the results
         if cache_service:

@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 from sqlalchemy import and_, desc, func, text
+import sqlalchemy as sa
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
@@ -268,11 +269,16 @@ class OptimizedStorageService(StorageService):
             List of trending posts with computed metrics
         """
         self._log_query(f"get_trending_posts_optimized(subreddit={subreddit})")
+        
+        # Enable query logging for debugging
+        self.enable_query_logging(True)
 
         try:
             cutoff_time = datetime.now(UTC) - timedelta(hours=time_window_hours)
+            logger.debug(f"Cutoff time: {cutoff_time}, time_window_hours: {time_window_hours}")
 
             # Use subquery to calculate engagement metrics efficiently
+            # SQLite-compatible age calculation using STRFTIME
             subquery = (
                 self.session.query(
                     RedditPost.post_id,
@@ -280,7 +286,10 @@ class OptimizedStorageService(StorageService):
                     RedditPost.num_comments,
                     RedditPost.created_utc,
                     func.count(Comment.id).label('actual_comments'),
-                    func.extract('epoch', func.now() - RedditPost.created_utc).label('age_seconds')
+                    func.cast(
+                        func.strftime('%s', 'now') - func.strftime('%s', RedditPost.created_utc),
+                        sa.Integer
+                    ).label('age_seconds')
                 )
                 .outerjoin(Comment)
                 .filter(
@@ -298,10 +307,20 @@ class OptimizedStorageService(StorageService):
             # Use CASE statement for SQLite compatibility (replaces greatest function)
             from sqlalchemy import case
             
-            age_hours = subquery.c.age_seconds / 3600
+            # Handle potential None values in age and score calculations
+            safe_age_seconds = case(
+                (subquery.c.age_seconds.is_(None), 3600),  # Default to 1 hour if None
+                else_=subquery.c.age_seconds
+            )
+            age_hours = safe_age_seconds / 3600
             safe_age_hours = case(
                 (age_hours < 1, 1),
                 else_=age_hours
+            )
+            
+            safe_score = case(
+                (subquery.c.score.is_(None), 0),  # Default to 0 if None
+                else_=subquery.c.score
             )
             
             trending_posts = (
@@ -311,7 +330,7 @@ class OptimizedStorageService(StorageService):
                     subquery.c.num_comments,
                     subquery.c.actual_comments,
                     subquery.c.age_seconds,
-                    (subquery.c.score / safe_age_hours).label('trending_score')
+                    (safe_score / safe_age_hours).label('trending_score')
                 )
                 .order_by(text('trending_score DESC'))
                 .limit(50)
@@ -321,13 +340,21 @@ class OptimizedStorageService(StorageService):
             # Convert to dictionaries
             results = []
             for row in trending_posts:
+                # Debug null values
+                logger.debug(f"Row values: post_id={row.post_id}, score={row.score}, age_seconds={row.age_seconds}, trending_score={row.trending_score}")
+                
+                # Handle potential None values safely
+                age_seconds = row.age_seconds if row.age_seconds is not None else 0
+                age_hours = age_seconds / 3600
+                trending_score = row.trending_score if row.trending_score is not None else 0.0
+                
                 results.append({
                     'post_id': row.post_id,
-                    'score': row.score,
-                    'num_comments': row.num_comments,
-                    'actual_comments': row.actual_comments,
-                    'age_hours': row.age_seconds / 3600,
-                    'trending_score': float(row.trending_score)
+                    'score': row.score or 0,
+                    'num_comments': row.num_comments or 0,
+                    'actual_comments': row.actual_comments or 0,
+                    'age_hours': age_hours,
+                    'trending_score': float(trending_score)
                 })
 
             logger.info(f"Found {len(results)} trending posts using optimized query")
