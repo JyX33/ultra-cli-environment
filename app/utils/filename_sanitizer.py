@@ -3,7 +3,6 @@
 
 from pathlib import Path
 import re
-from typing import Optional
 import unicodedata
 
 
@@ -23,20 +22,20 @@ WINDOWS_RESERVED_NAMES = {
 }
 
 
-def sanitize_filename(filename: Optional[str], max_length: int = MAX_FILENAME_LENGTH) -> str:
+def sanitize_filename(filename: str | None, max_length: int = MAX_FILENAME_LENGTH) -> str:
     """
     Sanitize a filename to prevent security vulnerabilities and ensure filesystem compatibility.
-    
+
     This function removes or replaces dangerous characters, prevents path traversal attacks,
     enforces length limits, and handles operating system reserved names.
-    
+
     Args:
         filename: The filename to sanitize
         max_length: Maximum allowed filename length (default: 255)
-        
+
     Returns:
         A sanitized filename that is safe for filesystem use
-        
+
     Raises:
         FilenameSecurityError: If the filename cannot be safely sanitized
     """
@@ -190,10 +189,7 @@ def _enforce_length_limits(filename: str, max_length: int) -> str:
         available_length = max_length - len(extension)
 
     # Truncate the name to fit
-    if available_length > 0:
-        name = name[:available_length]
-    else:
-        name = "file"  # Fallback name
+    name = name[:available_length] if available_length > 0 else "file"  # Fallback name
 
     return f"{name}{extension}"
 
@@ -201,12 +197,12 @@ def _enforce_length_limits(filename: str, max_length: int) -> str:
 def generate_safe_filename(subreddit: str, topic: str, extension: str = ".md") -> str:
     """
     Generate a safe filename for reports based on subreddit and topic.
-    
+
     Args:
         subreddit: The subreddit name
-        topic: The topic name  
+        topic: The topic name
         extension: File extension (default: .md)
-        
+
     Returns:
         A sanitized filename safe for filesystem use
     """

@@ -5,10 +5,10 @@ import re
 def escape_markdown_content(content: str) -> str:
     """
     Escape potentially dangerous content for safe markdown rendering.
-    
+
     Args:
         content: The content to escape
-        
+
     Returns:
         Escaped content safe for markdown
     """
@@ -34,13 +34,13 @@ def escape_markdown_content(content: str) -> str:
 def create_markdown_report(report_data: list, subreddit: str, topic: str) -> str:
     """
     Create a Markdown report from Reddit post data.
-    
+
     Args:
         report_data: List of dictionaries containing post data with keys:
                     'title', 'url', 'post_summary', 'comments_summary'
         subreddit: Name of the subreddit
         topic: Topic being reported on
-        
+
     Returns:
         str: Complete Markdown report as a string
     """

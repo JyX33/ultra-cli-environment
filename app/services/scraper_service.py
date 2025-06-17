@@ -10,13 +10,13 @@ from app.utils.url_validator import URLValidationError, validate_url
 def scrape_article_text(url: str) -> str:
     """
     Scrapes article text from a given URL by extracting text from <p> tags.
-    
+
     This function validates URLs for security before making requests to prevent
     SSRF attacks and other security vulnerabilities.
-    
+
     Args:
         url: The URL to scrape content from
-        
+
     Returns:
         A string containing the concatenated text from all <p> tags,
         or an error message if scraping fails or URL is invalid

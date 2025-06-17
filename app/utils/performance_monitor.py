@@ -6,7 +6,7 @@ from contextlib import contextmanager
 import statistics
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import psutil
 
@@ -58,7 +58,7 @@ class PerformanceMonitor:
         with self._lock:
             return self.response_times[-1] if self.response_times else 0.0
 
-    def get_response_time_history(self) -> List[float]:
+    def get_response_time_history(self) -> list[float]:
         """Get the complete response time history."""
         with self._lock:
             return self.response_times.copy()
@@ -122,8 +122,8 @@ class ResponseTimer:
     """Measures response times for operations."""
 
     def __init__(self) -> None:
-        self.start_time: Optional[float] = None
-        self.end_time: Optional[float] = None
+        self.start_time: float | None = None
+        self.end_time: float | None = None
 
     def start(self) -> None:
         """Start timing."""
@@ -146,7 +146,7 @@ class BenchmarkSuite:
     def __init__(self) -> None:
         self.monitor = PerformanceMonitor()
 
-    def benchmark_reddit_api(self, reddit_service: Any, iterations: int = 5) -> Dict[str, Any]:
+    def benchmark_reddit_api(self, reddit_service: Any, iterations: int = 5) -> dict[str, Any]:
         """Benchmark Reddit API operations."""
         response_times = []
         api_calls = []
@@ -168,7 +168,7 @@ class BenchmarkSuite:
             'avg_api_calls': statistics.mean(api_calls)
         }
 
-    def benchmark_concurrent_processing(self, subreddits: List[Any], topic: str, reddit_service: Any, iterations: int = 3) -> Dict[str, Any]:
+    def benchmark_concurrent_processing(self, subreddits: list[Any], topic: str, reddit_service: Any, iterations: int = 3) -> dict[str, Any]:
         """Benchmark concurrent subreddit processing."""
         from app.utils.relevance import (
             score_and_rank_subreddits,
@@ -202,7 +202,7 @@ class BenchmarkSuite:
             'concurrent_time': avg_concurrent
         }
 
-    def benchmark_memory_efficiency(self, post_id: str, reddit_service: Any, iterations: int = 3) -> Dict[str, Any]:
+    def benchmark_memory_efficiency(self, post_id: str, reddit_service: Any, iterations: int = 3) -> dict[str, Any]:
         """Benchmark memory-efficient comment processing."""
         from app.utils.comment_processor import process_comments_stream
 
@@ -228,7 +228,7 @@ class BenchmarkSuite:
             'max_processing_time': max(processing_times)
         }
 
-    def benchmark_end_to_end(self, topic: str, subreddit: str, reddit_service: Any, iterations: int = 2) -> Dict[str, Any]:
+    def benchmark_end_to_end(self, topic: str, subreddit: str, reddit_service: Any, iterations: int = 2) -> dict[str, Any]:
         """Run comprehensive end-to-end performance benchmark."""
         total_times = []
 
@@ -236,7 +236,7 @@ class BenchmarkSuite:
             start_time = time.time()
 
             # Simulate full workflow
-            subreddits = reddit_service.search_subreddits(topic)
+            reddit_service.search_subreddits(topic)
             posts = reddit_service.get_relevant_posts_optimized(subreddit)
 
             # Process each post (simplified)
@@ -268,15 +268,15 @@ class PerformanceRegression:
         self.baseline_metrics: dict[str, float] = {}
         self.performance_requirements: dict[str, float] = {}
 
-    def set_baseline(self, metrics: Dict[str, float]) -> None:
+    def set_baseline(self, metrics: dict[str, float]) -> None:
         """Set baseline performance metrics."""
         self.baseline_metrics = metrics.copy()
 
-    def set_performance_requirements(self, requirements: Dict[str, float]) -> None:
+    def set_performance_requirements(self, requirements: dict[str, float]) -> None:
         """Set performance requirements for automated gates."""
         self.performance_requirements = requirements.copy()
 
-    def detect_regression(self, current_metrics: Dict[str, float], tolerance: float = 0.15) -> bool:
+    def detect_regression(self, current_metrics: dict[str, float], tolerance: float = 0.15) -> bool:
         """Detect if current metrics represent a performance regression."""
         if not self.baseline_metrics:
             return False
@@ -293,7 +293,7 @@ class PerformanceRegression:
 
         return False
 
-    def calculate_improvements(self, current_metrics: Dict[str, float]) -> Dict[str, float]:
+    def calculate_improvements(self, current_metrics: dict[str, float]) -> dict[str, float]:
         """Calculate performance improvements compared to baseline."""
         improvements = {}
 
@@ -308,7 +308,7 @@ class PerformanceRegression:
 
         return improvements
 
-    def performance_gate(self, metrics: Dict[str, float]) -> Dict[str, Any]:
+    def performance_gate(self, metrics: dict[str, float]) -> dict[str, Any]:
         """Automated performance gate for CI/CD integration."""
         violations = []
         passed = True

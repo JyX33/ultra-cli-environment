@@ -4,7 +4,6 @@
 from collections.abc import Generator
 import os
 import time
-from typing import Optional
 
 from openai import OpenAI
 from openai._exceptions import (
@@ -24,13 +23,13 @@ class SummarizerError(Exception):
 class SummarizerService:
     """Modern OpenAI-based content summarization service."""
 
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: str | None = None):
         """
         Initialize the summarizer service with modern OpenAI client.
-        
+
         Args:
             api_key: OpenAI API key. If None, loads from OPENAI_API_KEY environment variable.
-        
+
         Raises:
             AuthenticationError: If API key is missing or invalid format
         """
@@ -65,11 +64,11 @@ class SummarizerService:
     def summarize_content(self, content: str, prompt_type: str) -> str:
         """
         Summarize content using OpenAI API with modern client and robust error handling.
-        
+
         Args:
             content: The text content to summarize
             prompt_type: Either "post" or "comments" to determine the system prompt
-            
+
         Returns:
             String containing the AI-generated summary or error message
         """
@@ -102,15 +101,14 @@ class SummarizerService:
     def _summarize_with_retry(self, content: str, system_prompt: str) -> str:
         """
         Attempt summarization with exponential backoff retry logic.
-        
+
         Args:
             content: Content to summarize
             system_prompt: System prompt to use
-            
+
         Returns:
             Summary text or error message
         """
-        last_exception: Optional[Exception] = None
 
         for attempt in range(self.max_retries):
             try:
@@ -133,8 +131,7 @@ class SummarizerService:
 
                 return response.choices[0].message.content.strip()
 
-            except RateLimitError as e:
-                last_exception = e
+            except RateLimitError:
                 if attempt < self.max_retries - 1:
                     delay = self.base_delay * (2 ** attempt)  # Exponential backoff
                     time.sleep(delay)
@@ -145,8 +142,7 @@ class SummarizerService:
                 # Don't retry authentication errors
                 return "AI summary could not be generated: Invalid API key."
 
-            except APIConnectionError as e:
-                last_exception = e
+            except APIConnectionError:
                 if attempt < self.max_retries - 1:
                     delay = self.base_delay * (1.5 ** attempt)  # Shorter backoff for connection issues
                     time.sleep(delay)
@@ -163,17 +159,15 @@ class SummarizerService:
                 else:
                     return "AI summary could not be generated: Invalid request."
 
-            except APIError as e:
-                last_exception = e
+            except APIError:
                 if attempt < self.max_retries - 1:
                     delay = self.base_delay * (2 ** attempt)
                     time.sleep(delay)
                     continue
                 return "AI summary could not be generated: API error occurred."
 
-            except Exception as e:
+            except Exception:
                 # Catch any other unexpected errors
-                last_exception = e
                 return "AI summary could not be generated: Unexpected error occurred."
 
         # If we get here, all retries failed
@@ -182,11 +176,11 @@ class SummarizerService:
     def summarize_content_stream(self, content: str, prompt_type: str) -> Generator[str, None, None]:
         """
         Stream summarization response for large content (future feature).
-        
+
         Args:
             content: Content to summarize
             prompt_type: Type of content prompt
-            
+
         Yields:
             Chunks of summarized content
         """
@@ -209,11 +203,11 @@ def get_summarizer_service() -> SummarizerService:
 def summarize_content(content: str, prompt_type: str) -> str:
     """
     Legacy function for backward compatibility.
-    
+
     Args:
         content: The text content to summarize
         prompt_type: Either "post" or "comments" to determine the system prompt
-        
+
     Returns:
         String containing the AI-generated summary or error message
     """

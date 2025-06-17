@@ -2,7 +2,6 @@
 # ABOUTME: Validates schemes, IP ranges, ports and URL format for security
 
 import ipaddress
-from typing import Optional, Set, Union
 from urllib.parse import urlparse
 
 # Configuration for URL validation
@@ -41,32 +40,32 @@ class URLValidationError(Exception):
     pass
 
 
-def is_url_valid(url: Optional[str]) -> bool:
+def is_url_valid(url: str | None) -> bool:
     """
     Check if a URL is valid for security (boolean return).
-    
+
     Args:
         url: The URL to validate
-        
+
     Returns:
         True if URL is valid and safe, False otherwise
     """
     return validate_url(url)
 
 
-def validate_url(url: Optional[str]) -> bool:
+def validate_url(url: str | None) -> bool:
     """
     Validate a URL for security to prevent SSRF attacks.
-    
+
     This function validates URLs to ensure they:
     - Use only HTTP or HTTPS schemes
     - Don't access internal/private IP addresses
     - Don't use suspicious ports commonly used for internal services
     - Have proper URL format
-    
+
     Args:
         url: The URL to validate
-        
+
     Returns:
         True if URL is valid and safe, False otherwise
     """
@@ -77,26 +76,26 @@ def validate_url(url: Optional[str]) -> bool:
         return False
 
 
-def validate_url_strict(url: Optional[str]) -> None:
+def validate_url_strict(url: str | None) -> None:
     """
     Validate a URL for security (raises exceptions for backward compatibility).
-    
+
     Args:
         url: The URL to validate
-        
+
     Raises:
         URLValidationError: If the URL is invalid or poses a security risk
     """
     _validate_url_internal(url)
 
 
-def _validate_url_internal(url: Optional[str]) -> None:
+def _validate_url_internal(url: str | None) -> None:
     """
     Internal URL validation that raises exceptions.
-    
+
     Args:
         url: The URL to validate
-        
+
     Raises:
         URLValidationError: If the URL is invalid or poses a security risk
     """
@@ -113,7 +112,7 @@ def _validate_url_internal(url: Optional[str]) -> None:
     try:
         parsed = urlparse(url)
     except Exception:
-        raise URLValidationError("Invalid URL format")
+        raise URLValidationError("Invalid URL format") from None
 
     # Check for HTTP header injection patterns in URL
     if '\n' in url or '\r' in url or '%0a' in url.lower() or '%0d' in url.lower():
@@ -133,7 +132,7 @@ def _validate_url_internal(url: Optional[str]) -> None:
         hostname = parsed.hostname
         port = parsed.port
     except ValueError:
-        raise URLValidationError("Invalid URL format")
+        raise URLValidationError("Invalid URL format") from None
 
     if not hostname:
         raise URLValidationError("Invalid URL format")
@@ -151,13 +150,13 @@ def _validate_url_internal(url: Optional[str]) -> None:
         _validate_port(port)
 
 
-def _resolve_hostname_to_ip(hostname: str) -> Optional[Union[ipaddress.IPv4Address, ipaddress.IPv6Address]]:
+def _resolve_hostname_to_ip(hostname: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
     """
     Try to resolve hostname to IP address, handling various obfuscation techniques.
-    
+
     Args:
         hostname: The hostname to resolve
-        
+
     Returns:
         IP address if hostname represents an IP, None if it's a regular hostname
     """
@@ -210,13 +209,13 @@ def _resolve_hostname_to_ip(hostname: str) -> Optional[Union[ipaddress.IPv4Addre
     return None
 
 
-def _validate_ip_address(ip_addr: Union[ipaddress.IPv4Address, ipaddress.IPv6Address]) -> None:
+def _validate_ip_address(ip_addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> None:
     """
     Validate that an IP address is not internal/private.
-    
+
     Args:
         ip_addr: The IP address to validate
-        
+
     Raises:
         URLValidationError: If the IP address is internal/private
     """
@@ -254,10 +253,10 @@ def _validate_ip_address(ip_addr: Union[ipaddress.IPv4Address, ipaddress.IPv6Add
 def _validate_hostname(hostname: str) -> None:
     """
     Validate hostname to prevent common SSRF bypasses.
-    
+
     Args:
         hostname: The hostname to validate
-        
+
     Raises:
         URLValidationError: If the hostname poses a security risk
     """
@@ -289,10 +288,10 @@ def _validate_hostname(hostname: str) -> None:
 def _validate_port(port: int) -> None:
     """
     Validate that a port is not commonly used for internal services.
-    
+
     Args:
         port: The port number to validate
-        
+
     Raises:
         URLValidationError: If the port is commonly used for internal services
     """

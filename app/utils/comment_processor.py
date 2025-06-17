@@ -2,7 +2,6 @@
 # ABOUTME: Provides utilities for processing large comment threads without memory exhaustion
 
 from collections.abc import Generator
-from typing import List, Optional, Set
 
 from app.services.reddit_service import RedditService
 
@@ -13,7 +12,7 @@ class CommentMemoryTracker:
     def __init__(self, max_memory_mb: float):
         """
         Initialize memory tracker with maximum memory limit.
-        
+
         Args:
             max_memory_mb: Maximum memory usage in megabytes
         """
@@ -21,13 +20,13 @@ class CommentMemoryTracker:
         self.current_memory_bytes = 0
         self.comment_count = 0
 
-    def can_add_comment(self, comment_text: Optional[str]) -> bool:
+    def can_add_comment(self, comment_text: str | None) -> bool:
         """
         Check if a comment can be added without exceeding memory limit.
-        
+
         Args:
             comment_text: The comment text to check
-            
+
         Returns:
             bool: True if comment can be added safely
         """
@@ -42,7 +41,7 @@ class CommentMemoryTracker:
     def add_comment(self, comment_text: str) -> None:
         """
         Add a comment to memory tracking.
-        
+
         Args:
             comment_text: The comment text being added
         """
@@ -54,7 +53,7 @@ class CommentMemoryTracker:
     def get_memory_usage_mb(self) -> float:
         """
         Get current memory usage in megabytes.
-        
+
         Returns:
             float: Current memory usage in MB
         """
@@ -74,26 +73,26 @@ def process_comments_stream(
     max_memory_mb: float = 10,
     top_count: int = 15,
     deduplicate: bool = False
-) -> List[str]:
+) -> list[str]:
     """
     Process comments from a Reddit post using memory-efficient streaming.
-    
+
     This function processes comments one at a time, tracking memory usage
     and stopping when limits are reached or enough top comments are collected.
-    
+
     Args:
         post_id: Reddit post ID
         reddit_service: Service for Reddit API access
         max_memory_mb: Maximum memory usage in megabytes
         top_count: Maximum number of top comments to return
         deduplicate: Whether to remove duplicate comments
-        
+
     Returns:
         List[str]: Processed comment texts, limited by memory and count constraints
     """
     memory_tracker = CommentMemoryTracker(max_memory_mb)
-    processed_comments: List[str] = []
-    seen_comments: Optional[Set[str]] = set() if deduplicate else None
+    processed_comments: list[str] = []
+    seen_comments: set[str] | None = set() if deduplicate else None
 
     try:
         # Get comments using the existing Reddit service method
@@ -142,13 +141,13 @@ def get_comments_summary_stream(
 ) -> str:
     """
     Get a memory-efficient summary of top comments from a post.
-    
+
     Args:
         post_id: Reddit post ID
         reddit_service: Service for Reddit API access
         max_memory_mb: Maximum memory usage in megabytes
         top_count: Maximum number of comments to include
-        
+
     Returns:
         str: Combined text of top comments, space-separated
     """
@@ -167,13 +166,13 @@ def get_comments_summary_stream(
     return " [COMMENT_SEPARATOR] ".join(comments)
 
 
-def comment_generator(comments: List) -> Generator[str, None, None]:
+def comment_generator(comments: list) -> Generator[str, None, None]:
     """
     Generator that yields comment texts one at a time for memory efficiency.
-    
+
     Args:
         comments: List of comment objects
-        
+
     Yields:
         str: Comment text
     """
