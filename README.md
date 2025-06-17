@@ -12,6 +12,7 @@ A **production-ready, enterprise-grade** Python application that automates findi
 ## 🚀 Features
 
 ### Core Intelligence
+
 - **Smart Subreddit Discovery**: AI-powered relevance scoring with concurrent processing
 - **Advanced Content Filtering**: Multi-criteria filtering with engagement analysis
 - **Secure Web Scraping**: Content extraction with security validation and rate limiting
@@ -20,6 +21,7 @@ A **production-ready, enterprise-grade** Python application that automates findi
 - **RESTful API**: FastAPI with comprehensive validation and error handling
 
 ### Enterprise Performance & Monitoring
+
 - **Database Excellence**: Full ORM with migrations, retention policies, and automated maintenance
 - **Query Optimization**: 70% query reduction through eager loading and strategic indexing
 - **Multi-tier Caching**: Redis + in-memory with 78% cache hit rate and smart invalidation
@@ -28,6 +30,7 @@ A **production-ready, enterprise-grade** Python application that automates findi
 - **Horizontal Scaling**: Production-ready with load balancer support and session management
 
 ### Production Features
+
 - **Data Retention**: Automated cleanup and archival with configurable policies
 - **Security Hardening**: Input validation, SQL injection prevention, and security scanning
 - **Comprehensive Testing**: 100% type safety, integration tests, and performance benchmarks
@@ -37,19 +40,23 @@ A **production-ready, enterprise-grade** Python application that automates findi
 ## 📋 Prerequisites
 
 ### Required
+
 - **Python 3.12+** (3.9+ supported for basic features)
 - **Reddit API credentials** (client ID, secret, user agent)
 - **OpenAI API key** with GPT-4o access
 
 ### Database
+
 - **PostgreSQL 12+** (production, recommended)
 - **SQLite 3.35+** (development, included)
 
 ### Optional (Performance)
+
 - **Redis 6+** (distributed caching, 78% hit rate improvement)
 - **Docker & Docker Compose** (containerized deployment)
 
 ### Development
+
 - **uv** (recommended) or **pip** for dependency management
 - **Git** for version control
 
@@ -109,7 +116,7 @@ A **production-ready, enterprise-grade** Python application that automates findi
    ```
 
    **Performance Features Setup:**
-   
+
    ```bash
    # Start Redis for caching (optional but recommended)
    docker run -d --name redis -p 6379:6379 redis:7-alpine
@@ -141,41 +148,52 @@ Once running, visit `http://localhost:8000/docs` for interactive API documentati
 ### Core API Endpoints
 
 #### 1. Discover Subreddits
+
 ```http
 GET /discover-subreddits/{topic}
 ```
+
 Find and rank relevant subreddits with AI-powered scoring.
 
 #### 2. Generate Report
+
 ```http
 GET /generate-report/{subreddit}/{topic}?store_data=true&include_history=false
 ```
+
 Generate comprehensive Markdown reports with optional data persistence.
 
 #### 3. Check Updates
+
 ```http
 GET /check-updates/{subreddit}/{topic}
 ```
+
 Track changes and engagement deltas with historical comparison.
 
 #### 4. History & Trends
+
 ```http
 GET /history/{subreddit}?page=1&limit=20
 GET /trends/{subreddit}?days=7
 ```
+
 Access historical data and trend analysis.
 
 ### Performance & Monitoring Endpoints
 
 #### 5. Performance Stats
+
 ```http
 GET /performance/stats
 GET /performance/report
 POST /performance/reset
 ```
+
 Real-time performance metrics and analysis.
 
 #### 6. Analytics
+
 ```http
 GET /trending/{subreddit}          # Optimized trending posts
 GET /analytics/{subreddit}         # Advanced analytics
@@ -183,6 +201,7 @@ POST /optimize-database           # Database optimization
 ```
 
 #### 7. Debug & Diagnostics
+
 ```http
 GET /debug/relevance/{topic}       # Relevance scoring debug
 GET /debug/reddit-api             # API connectivity test
@@ -447,6 +466,20 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 - Try different subreddits or topics
 - Verify the subreddit exists and has recent activity
+
+**"Database only has alembic_version table"**
+
+- This occurs when migration partially fails but is marked complete
+- Solution:
+  ```bash
+  # Reset migration state and re-run
+  uv run python -c "
+  import sqlite3
+  conn = sqlite3.connect('reddit_agent.db')
+  conn.execute('DELETE FROM alembic_version').close()
+  conn.close()"
+  uv run alembic upgrade head
+  ```
 
 **Docker build issues**
 
