@@ -509,9 +509,9 @@ async def discover_subreddits(topic: str) -> dict[str, Any]:
                 "topic": topic,
                 "subreddits": [
                     {
-                        "name": sub["subreddit"].display_name,
-                        "description": sub["subreddit"].public_description or "No description available",
-                        "subscribers": getattr(sub["subreddit"], "subscribers", 0),
+                        "name": sub["name"],
+                        "description": sub["description"] or "No description available",
+                        "subscribers": sub.get("subscribers", 0),
                         "relevance_score": sub["score"],
                     }
                     for sub in top_3
