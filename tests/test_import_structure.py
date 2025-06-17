@@ -1,11 +1,12 @@
 # ABOUTME: Tests for import structure security and consistency across the application
 # ABOUTME: Validates that modules can be imported properly without unsafe sys.path manipulation
 
-import pytest
-import sys
 import importlib
 from pathlib import Path
+import sys
 from unittest.mock import patch
+
+import pytest
 
 
 class TestImportStructure:
@@ -15,28 +16,28 @@ class TestImportStructure:
         """Test that all app modules can be imported without sys.path manipulation."""
         # Save original sys.path
         original_path = sys.path[:]
-        
+
         try:
             # Ensure no artificial path additions
             if any('../..' in path for path in sys.path):
                 sys.path = [path for path in sys.path if '../..' not in path]
-            
+
             # Test importing core app modules
+            import app.core.config
             import app.main
             import app.services.reddit_service
             import app.services.scraper_service
             import app.services.summarizer_service
+            import app.utils.filename_sanitizer
             import app.utils.relevance
             import app.utils.report_generator
-            import app.utils.filename_sanitizer
-            import app.core.config
-            
+
             # Verify modules loaded correctly
             assert hasattr(app.main, 'app')
             assert hasattr(app.services.reddit_service, 'RedditService')
             assert hasattr(app.services.scraper_service, 'scrape_article_text')
             assert hasattr(app.services.summarizer_service, 'summarize_content')
-            
+
         finally:
             # Restore original sys.path
             sys.path[:] = original_path
@@ -46,14 +47,14 @@ class TestImportStructure:
         # Test that all imports use proper app.* pattern
         modules_to_test = [
             'app.services.reddit_service',
-            'app.services.scraper_service', 
+            'app.services.scraper_service',
             'app.services.summarizer_service',
             'app.utils.relevance',
             'app.utils.report_generator',
             'app.utils.filename_sanitizer',
             'app.core.config'
         ]
-        
+
         for module_name in modules_to_test:
             try:
                 module = importlib.import_module(module_name)
@@ -70,15 +71,15 @@ class TestImportStructure:
         try:
             from app import main
             assert main is not None
-            
+
             # Test that main can import all its dependencies
             from app.services.reddit_service import RedditService
+            from app.services.scraper_service import scrape_article_text
             from app.services.summarizer_service import summarize_content
+            from app.utils.filename_sanitizer import generate_safe_filename
             from app.utils.relevance import score_and_rank_subreddits
             from app.utils.report_generator import create_markdown_report
-            from app.utils.filename_sanitizer import generate_safe_filename
-            from app.services.scraper_service import scrape_article_text
-            
+
             # Verify imports successful
             assert RedditService is not None
             assert summarize_content is not None
@@ -86,7 +87,7 @@ class TestImportStructure:
             assert create_markdown_report is not None
             assert generate_safe_filename is not None
             assert scrape_article_text is not None
-            
+
         except ImportError as e:
             pytest.fail(f"Relative import failed: {e}")
 
@@ -104,13 +105,13 @@ class TestImportStructure:
     def test_package_structure_integrity(self):
         """Test that package structure supports proper imports."""
         app_path = Path(__file__).parent.parent / 'app'
-        
+
         # Verify __init__.py files exist for package structure
         assert (app_path / '__init__.py').exists()
         assert (app_path / 'services' / '__init__.py').exists()
         assert (app_path / 'utils' / '__init__.py').exists()
         assert (app_path / 'core' / '__init__.py').exists()
-        
+
         # Verify key modules exist
         assert (app_path / 'main.py').exists()
         assert (app_path / 'services' / 'scraper_service.py').exists()
@@ -122,7 +123,7 @@ class TestImportStructure:
         """Test that we can detect if sys.path has been manipulated unsafely."""
         # Simulate the problematic sys.path manipulation
         mock_path.__contains__ = lambda self, item: '../..' in str(item)
-        
+
         # Should detect the unsafe pattern
         unsafe_paths = [path for path in mock_path if '../..' in str(path)]
         assert len(unsafe_paths) == 0  # After cleanup, should be empty
@@ -131,8 +132,8 @@ class TestImportStructure:
         """Test proper handling of import errors without sys.path manipulation."""
         # Test importing non-existent module fails gracefully
         with pytest.raises(ImportError):
-            import app.nonexistent.module
-        
+            pass
+
         # Test that legitimate modules still import correctly
         from app.services.reddit_service import RedditService
         assert RedditService is not None
