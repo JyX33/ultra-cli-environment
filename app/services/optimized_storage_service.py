@@ -295,10 +295,23 @@ class OptimizedStorageService(StorageService):
             )
 
             # Calculate trending score using database functions
+            # Use CASE statement for SQLite compatibility (replaces greatest function)
+            from sqlalchemy import case
+            
+            age_hours = subquery.c.age_seconds / 3600
+            safe_age_hours = case(
+                (age_hours < 1, 1),
+                else_=age_hours
+            )
+            
             trending_posts = (
                 self.session.query(
-                    subquery,
-                    (subquery.c.score / func.greatest(subquery.c.age_seconds / 3600, 1)).label('trending_score')
+                    subquery.c.post_id,
+                    subquery.c.score,
+                    subquery.c.num_comments,
+                    subquery.c.actual_comments,
+                    subquery.c.age_seconds,
+                    (subquery.c.score / safe_age_hours).label('trending_score')
                 )
                 .order_by(text('trending_score DESC'))
                 .limit(50)
@@ -307,14 +320,14 @@ class OptimizedStorageService(StorageService):
 
             # Convert to dictionaries
             results = []
-            for post_data, trending_score in trending_posts:
+            for row in trending_posts:
                 results.append({
-                    'post_id': post_data.post_id,
-                    'score': post_data.score,
-                    'num_comments': post_data.num_comments,
-                    'actual_comments': post_data.actual_comments,
-                    'age_hours': post_data.age_seconds / 3600,
-                    'trending_score': float(trending_score)
+                    'post_id': row.post_id,
+                    'score': row.score,
+                    'num_comments': row.num_comments,
+                    'actual_comments': row.actual_comments,
+                    'age_hours': row.age_seconds / 3600,
+                    'trending_score': float(row.trending_score)
                 })
 
             logger.info(f"Found {len(results)} trending posts using optimized query")
