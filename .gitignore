@@ -254,6 +254,26 @@ docker-compose.override.yml
 *.iso
 
 # ===================================
+# Database Files
+# ===================================
+# SQLite databases
+*.db
+*.sqlite
+*.sqlite3
+reddit_agent.db
+test.db
+development.db
+production.db
+
+# Database migrations config (may contain sensitive settings)
+alembic.ini
+
+# Database backups and dumps
+*.sql
+*.dump
+database_backups/
+
+# ===================================
 # Project Specific Exclusions
 # ===================================
 # API Response Dumps
