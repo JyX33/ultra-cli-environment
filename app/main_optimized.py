@@ -9,7 +9,7 @@ import re
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.middleware.base import BaseHTTPMiddleware  # type: ignore
+from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
