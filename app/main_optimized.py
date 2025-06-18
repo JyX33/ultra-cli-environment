@@ -9,8 +9,9 @@ import re
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from starlette.middleware.base import BaseHTTPMiddleware
+from prawcore.exceptions import Forbidden, NotFound
 from sqlalchemy.orm import Session
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.db.session import get_db
 from app.models.api_models import (
@@ -77,7 +78,7 @@ class PerformanceMiddleware(BaseHTTPMiddleware):
             response = await call_next(request)
 
         # Record response time
-        duration_ms = timer.duration * 1000
+        duration_ms = timer.duration * 1000 if timer.duration is not None else 0
         performance_monitor.record_request(duration_ms)
 
         # Add performance headers
@@ -227,92 +228,139 @@ async def check_updates_optimized(
     try:
         with performance_monitor.measure_time("reddit_api_fetch") as timer:
             # Get posts from Reddit
-            posts_data = reddit_service.get_relevant_posts_optimized(subreddit)
+            try:
+                posts_data = reddit_service.get_relevant_posts_optimized(subreddit)
+            except NotFound:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Subreddit r/{subreddit} not found. Please check the subreddit name and try again."
+                )
+            except Forbidden:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Subreddit r/{subreddit} is private or restricted and cannot be accessed."
+                )
             performance_monitor.record_database_query()
 
         # Get last check run using optimized query
         with performance_monitor.measure_time("get_latest_check_run") as timer:
             last_check_run = storage_service.get_latest_check_run(subreddit, topic)
-            performance_monitor.record_database_query(timer.duration * 1000)
+            performance_monitor.record_database_query(timer.duration * 1000 if timer.duration is not None else 0)
 
         # Create new check run
         with performance_monitor.measure_time("create_check_run") as timer:
             check_run_id = storage_service.create_check_run(subreddit, topic)
             storage_service.session.commit()
-            performance_monitor.record_database_query(timer.duration * 1000)
+            performance_monitor.record_database_query(timer.duration * 1000 if timer.duration is not None else 0)
+
+        # Convert Reddit posts to dictionaries for storage
+        with performance_monitor.measure_time("convert_posts") as timer:
+            current_posts = []
+            for post in posts_data:
+                post_data = {
+                    "post_id": post.id,
+                    "subreddit": post.subreddit.display_name,
+                    "title": post.title,
+                    "author": str(post.author) if post.author else None,
+                    "url": post.url,
+                    "score": post.score,
+                    "num_comments": post.num_comments,
+                    "created_utc": datetime.fromtimestamp(post.created_utc, UTC),
+                    "is_self": post.is_self,
+                    "selftext": post.selftext if hasattr(post, 'selftext') else "",
+                    "upvote_ratio": post.upvote_ratio,
+                    "over_18": post.over_18,
+                    "spoiler": post.spoiler,
+                    "stickied": post.stickied,
+                    "permalink": post.permalink,
+                    "check_run_id": check_run_id
+                }
+                current_posts.append(post_data)
 
         # Store posts efficiently
         with performance_monitor.measure_time("bulk_store_posts") as timer:
-            for post in posts_data:
-                post["check_run_id"] = check_run_id
-                storage_service.save_post(post)
+            for post_data in current_posts:
+                storage_service.save_post(post_data)
             storage_service.session.commit()
 
-        # Get comments and store them
-        new_posts = []
-        updated_posts = []
+        # Use change detection service
+        change_detection_service = ChangeDetectionService(storage_service.session, storage_service)
+        last_check_time = last_check_run.timestamp if last_check_run else None
 
-        if last_check_run:
-            # Use optimized change detection
-            change_detection_service = ChangeDetectionService(storage_service.session, storage_service)
+        # Detect changes using converted post data
+        with performance_monitor.measure_time("change_detection") as timer:
+            detection_result = change_detection_service.detect_all_changes(
+                current_posts=current_posts,
+                last_check_time=last_check_time,
+                check_run_id=check_run_id,
+                subreddit=subreddit
+            )
 
-            with performance_monitor.measure_time("change_detection") as timer:
-                new_posts = change_detection_service.find_new_posts(
-                    posts_data,
-                    last_check_run.timestamp
-                )
-                updated_posts = change_detection_service.find_updated_posts(posts_data)
-        else:
-            # First time check - all posts are new
-            new_posts = posts_data
+        new_posts = detection_result.new_posts
+        updated_posts = detection_result.updated_posts
+        new_comments = []  # Not implemented yet in change detection service
 
-        # Prepare response
+        # Generate summary
+        summary = f"Found {len(new_posts)} new posts, {len(updated_posts)} updated posts, and {len(new_comments)} new comments in r/{subreddit}"
+
+        # Convert PostUpdate objects to PostUpdateResponse format (same as standard API)
+        new_posts_response = []
+        for post_update in new_posts:
+            post_response = PostUpdateResponse(
+                post_id=post_update.reddit_post_id,
+                title=post_update.title,
+                author=None,  # Will be filled from original post data if available
+                subreddit=post_update.subreddit,
+                url="",  # Will be filled from original post data if available
+                score=post_update.current_score,
+                num_comments=post_update.current_comments,
+                created_utc=post_update.current_timestamp,
+                is_new=True,
+                score_change=post_update.engagement_delta.score_delta if post_update.engagement_delta else None,
+                comment_change=post_update.engagement_delta.comments_delta if post_update.engagement_delta else None,
+                engagement_delta=post_update.engagement_delta
+            )
+            new_posts_response.append(post_response)
+
+        updated_posts_response = []
+        for post_update in updated_posts:
+            post_response = PostUpdateResponse(
+                post_id=post_update.reddit_post_id,
+                title=post_update.title,
+                author=None,  # Will be filled from original post data if available
+                subreddit=post_update.subreddit,
+                url="",  # Will be filled from original post data if available
+                score=post_update.current_score,
+                num_comments=post_update.current_comments,
+                created_utc=post_update.current_timestamp,
+                is_new=False,
+                score_change=post_update.engagement_delta.score_delta if post_update.engagement_delta else None,
+                comment_change=post_update.engagement_delta.comments_delta if post_update.engagement_delta else None,
+                engagement_delta=post_update.engagement_delta
+            )
+            updated_posts_response.append(post_response)
+
+        # Enrich posts with original Reddit data (URL and author)
+        post_data_map = {post["post_id"]: post for post in current_posts}
+
+        for post_response in new_posts_response:
+            if post_response.post_id in post_data_map:
+                original_post = post_data_map[post_response.post_id]
+                post_response.url = original_post["url"]
+                post_response.author = original_post["author"]
+
+        for post_response in updated_posts_response:
+            if post_response.post_id in post_data_map:
+                original_post = post_data_map[post_response.post_id]
+                post_response.url = original_post["url"]
+                post_response.author = original_post["author"]
+
+        # Prepare response - using same format as standard API for consistency
         response_data = {
-            "subreddit": subreddit,
-            "topic": topic,
-            "check_timestamp": datetime.now(UTC).isoformat(),
-            "new_posts": [
-                PostUpdateResponse(
-                    post_id=str(post.get("post_id", post.get("id", ""))) if isinstance(post, dict) else str(post.reddit_post_id),
-                    title=post.get("title", "") if isinstance(post, dict) else post.title,
-                    author=post.get("author", "") if isinstance(post, dict) else "",
-                    subreddit=post.get("subreddit", "") if isinstance(post, dict) else post.subreddit,
-                    url=post.get("url", "") if isinstance(post, dict) else "",
-                    score=post.get("score", 0) if isinstance(post, dict) else post.current_score,
-                    num_comments=post.get("num_comments", 0) if isinstance(post, dict) else post.current_comments,
-                    created_utc=datetime.now(UTC),
-                    is_new=True,
-                    score_change=None,
-                    comment_change=None,
-                    engagement_delta=None
-                )
-                for post in new_posts[:10]  # Limit to 10 for performance
-            ],
-            "updated_posts": [
-                PostUpdateResponse(
-                    post_id=str(update.post_id),
-                    title=update.title,
-                    author="",
-                    subreddit=update.subreddit,
-                    url="",
-                    score=update.current_score,
-                    num_comments=update.current_comments,
-                    created_utc=update.current_timestamp,
-                    is_new=False,
-                    score_change=update.score_delta,
-                    comment_change=update.comments_delta,
-                    engagement_delta=update.engagement_delta
-                )
-                for update in updated_posts[:10]  # Limit to 10 for performance
-            ],
-            "new_comments": [],  # Simplified for performance
-            "summary": {
-                "total_new_posts": len(new_posts),
-                "total_updated_posts": len(updated_posts),
-                "total_new_comments": 0,
-                "check_run_id": check_run_id
-            },
-            "trend_summary": None  # Can be added based on historical data
+            "new_posts": new_posts_response,
+            "updated_posts": updated_posts_response,
+            "new_comments": new_comments,
+            "summary": summary
         }
 
         # Cache the result
@@ -360,6 +408,9 @@ async def check_updates_optimized(
             check_run_id=check_run_id
         )
 
+    except HTTPException:
+        # Re-raise HTTPExceptions (like 404, 422) without modification
+        raise
     except Exception as e:
         logging.getLogger(__name__).error(f"Error in check_updates_optimized: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to check updates: {e!s}") from None
@@ -426,7 +477,7 @@ async def get_subreddit_analytics(
                 subreddit=subreddit,
                 start_date=start_date
             )
-            performance_monitor.record_database_query(timer.duration * 1000)
+            performance_monitor.record_database_query(timer.duration * 1000 if timer.duration is not None else 0)
 
         # Compute aggregate statistics
         if posts_with_stats:
@@ -484,7 +535,7 @@ async def optimize_database_performance(
 
         return {
             "optimization_result": result,
-            "duration_ms": timer.duration * 1000,
+            "duration_ms": timer.duration * 1000 if timer.duration is not None else 0,
             "timestamp": datetime.now().isoformat()
         }
 

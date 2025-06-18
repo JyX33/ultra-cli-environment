@@ -6,6 +6,7 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
+from prawcore.exceptions import Forbidden, NotFound
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -166,7 +167,18 @@ async def generate_report(
         subreddit = validate_input_string(subreddit, "subreddit")
         topic = validate_input_string(topic, "topic")
         # Get relevant posts from the subreddit using optimized API calls
-        posts = reddit_service.get_relevant_posts_optimized(subreddit)
+        try:
+            posts = reddit_service.get_relevant_posts_optimized(subreddit)
+        except NotFound:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Subreddit r/{subreddit} not found. Please check the subreddit name and try again."
+            )
+        except Forbidden:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Subreddit r/{subreddit} is private or restricted and cannot be accessed."
+            )
 
         if not posts:
             raise HTTPException(
@@ -378,7 +390,18 @@ async def check_updates(
             last_check_time = latest_check_run.timestamp if latest_check_run else datetime.fromtimestamp(0, UTC)
 
         # Get current posts from Reddit
-        reddit_posts = reddit_service.get_relevant_posts_optimized(subreddit)
+        try:
+            reddit_posts = reddit_service.get_relevant_posts_optimized(subreddit)
+        except NotFound:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Subreddit r/{subreddit} not found. Please check the subreddit name and try again."
+            )
+        except Forbidden:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Subreddit r/{subreddit} is private or restricted and cannot be accessed."
+            )
 
         # Create new check run
         check_run_id = storage_service.create_check_run(subreddit, topic)
@@ -482,6 +505,21 @@ async def check_updates(
                 engagement_delta=post_update.engagement_delta
             )
             updated_posts_response.append(post_response)
+
+        # Enrich posts with original Reddit data (URL and author)
+        post_data_map = {post["post_id"]: post for post in current_posts}
+
+        for post_response in new_posts_response:
+            if post_response.post_id in post_data_map:
+                original_post = post_data_map[post_response.post_id]
+                post_response.url = original_post["url"]
+                post_response.author = original_post["author"]
+
+        for post_response in updated_posts_response:
+            if post_response.post_id in post_data_map:
+                original_post = post_data_map[post_response.post_id]
+                post_response.url = original_post["url"]
+                post_response.author = original_post["author"]
 
         # Comments are not yet implemented in change detection
         new_comments_response: list[CommentUpdateResponse] = []

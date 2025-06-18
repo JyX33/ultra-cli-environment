@@ -6,6 +6,7 @@ from typing import Any
 
 import praw
 from praw.exceptions import PRAWException
+from prawcore.exceptions import Forbidden, NotFound
 
 from app.core.config import config
 
@@ -28,7 +29,8 @@ class RedditService:
             self.reddit = praw.Reddit(
                 client_id=config.REDDIT_CLIENT_ID,
                 client_secret=config.REDDIT_CLIENT_SECRET,
-                user_agent=config.REDDIT_USER_AGENT
+                user_agent=config.REDDIT_USER_AGENT,
+                username="JyXAgent"
             )
 
             # Test the connection
@@ -200,31 +202,50 @@ class RedditService:
 
         Returns:
             list: List of up to 5 valid post objects sorted by comment count
+
+        Raises:
+            NotFound: When the subreddit doesn't exist
+            Forbidden: When the subreddit is private or restricted
+            PRAWException: For other Reddit API errors
         """
-        # Fetch fewer posts initially - optimization reduces API load
-        subreddit = self.reddit.subreddit(subreddit_name)
-        posts = list(subreddit.top(time_filter='day', limit=15))
+        try:
+            # Fetch fewer posts initially - optimization reduces API load
+            subreddit = self.reddit.subreddit(subreddit_name)
+            posts = list(subreddit.top(time_filter='day', limit=15))
 
-        # Sort posts by number of comments in descending order
-        posts.sort(key=lambda post: post.num_comments, reverse=True)
+            # Sort posts by number of comments in descending order
+            posts.sort(key=lambda post: post.num_comments, reverse=True)
 
-        # Media file extensions and domains to exclude
-        media_extensions = ('.jpg', '.jpeg', '.png', '.gif', '.mp4')
-        media_domains = ('i.redd.it', 'v.redd.it', 'i.imgur.com')
+            # Media file extensions and domains to exclude
+            media_extensions = ('.jpg', '.jpeg', '.png', '.gif', '.mp4')
+            media_domains = ('i.redd.it', 'v.redd.it', 'i.imgur.com')
 
-        valid_posts: list[Any] = []
+            valid_posts: list[Any] = []
 
-        # Process posts with early termination for efficiency
-        for post in posts:
-            # Early termination - stop when we have enough valid posts
-            if len(valid_posts) >= 5:
-                break
+            # Process posts with early termination for efficiency
+            for post in posts:
+                # Early termination - stop when we have enough valid posts
+                if len(valid_posts) >= 5:
+                    break
 
-            # Optimized validation logic
-            if self._is_valid_post(post, media_extensions, media_domains):
-                valid_posts.append(post)
+                # Optimized validation logic
+                if self._is_valid_post(post, media_extensions, media_domains):
+                    valid_posts.append(post)
 
-        return valid_posts
+            return valid_posts
+
+        except NotFound as e:
+            logger.error(f"Subreddit r/{subreddit_name} not found: {e}")
+            raise
+        except Forbidden as e:
+            logger.error(f"Access forbidden to subreddit r/{subreddit_name}: {e}")
+            raise
+        except PRAWException as e:
+            logger.error(f"PRAW error getting posts from r/{subreddit_name}: {type(e).__name__}: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error getting posts from r/{subreddit_name}: {type(e).__name__}: {e}")
+            raise
 
     def _is_valid_post(self, post: Any, media_extensions: tuple, media_domains: tuple) -> bool:
         """

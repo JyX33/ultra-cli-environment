@@ -601,3 +601,42 @@ class TestCheckUpdatesEndpoint:
             # Test with URL-encoded parameters
             response = client.get("/check-updates/technology/artificial%20intelligence")
             assert response.status_code in [200, 500]  # Should not be 404
+
+    def test_invalid_subreddit_error_handling(self, client):
+        """Test that invalid subreddit names return proper 404 errors instead of 500."""
+        from prawcore.exceptions import Forbidden, NotFound
+
+        class MockResponse:
+            def __init__(self, status_code: int):
+                self.status_code = status_code
+
+        # Test NotFound exception handling
+        with patch('app.main.reddit_service') as mock_reddit_service, \
+             patch('app.main.StorageService') as mock_storage_service:
+
+            mock_reddit_service.get_relevant_posts_optimized.side_effect = NotFound(MockResponse(404))
+
+            mock_storage = Mock()
+            mock_storage_service.return_value = mock_storage
+            mock_storage.get_latest_check_run.return_value = None
+
+            response = client.get("/check-updates/ThisSubredditDefinitelyDoesNotExist12345/test-topic")
+
+            assert response.status_code == 404
+            assert "not found" in response.json()["detail"].lower()
+            assert "ThisSubredditDefinitelyDoesNotExist12345" in response.json()["detail"]
+
+        # Test Forbidden exception handling
+        with patch('app.main.reddit_service') as mock_reddit_service, \
+             patch('app.main.StorageService') as mock_storage_service:
+
+            mock_reddit_service.get_relevant_posts_optimized.side_effect = Forbidden(MockResponse(403))
+
+            mock_storage = Mock()
+            mock_storage_service.return_value = mock_storage
+            mock_storage.get_latest_check_run.return_value = None
+
+            response = client.get("/check-updates/private_subreddit/test-topic")
+
+            assert response.status_code == 422
+            assert "private or restricted" in response.json()["detail"].lower()
