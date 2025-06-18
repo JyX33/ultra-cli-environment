@@ -13,6 +13,9 @@ config.ini
 secrets.json
 credentials.json
 
+# E2E Test Credentials
+tests/e2e/.env.test
+
 # ===================================
 # Python
 # ===================================

@@ -1,0 +1,99 @@
+services:
+  # Main application container for testing
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+      - tests/e2e/.env.test
+    environment:
+      - PYTHONPATH=/app
+      - DATABASE_URL=postgresql://testuser:testpass@postgres:5432/testdb
+      - REDIS_URL=redis://redis:6379/0
+      - ENABLE_REDIS=true
+      - ENABLE_PERFORMANCE_MONITORING=true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - ./alembic:/app/alembic
+      - ./alembic.ini:/app/alembic.ini
+    command: >
+      sh -c "
+        alembic upgrade head &&
+        uvicorn app.main:app --host 0.0.0.0 --port 8000
+      "
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/').read()"]
+      interval: 15s
+      timeout: 10s
+      retries: 8
+
+  # Optimized application container for testing
+  app-optimized:
+    build: .
+    ports:
+      - "8001:8000"
+    env_file:
+      - .env
+      - tests/e2e/.env.test
+    environment:
+      - PYTHONPATH=/app
+      - DATABASE_URL=postgresql://testuser:testpass@postgres:5432/testdb
+      - REDIS_URL=redis://redis:6379/0
+      - ENABLE_REDIS=true
+      - ENABLE_PERFORMANCE_MONITORING=true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      app:
+        condition: service_healthy
+    command: >
+      sh -c "
+        uvicorn app.main_optimized:app --host 0.0.0.0 --port 8000
+      "
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/').read()"]
+      interval: 15s
+      timeout: 10s
+      retries: 8
+
+  # PostgreSQL database for testing
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: testuser
+      POSTGRES_PASSWORD: testpass
+      POSTGRES_DB: testdb
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_test_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U testuser -d testdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Redis for caching tests
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_test_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  postgres_test_data:
+  redis_test_data:
