@@ -5,8 +5,8 @@ from datetime import UTC, datetime, timedelta
 import logging
 from typing import Any
 
-from sqlalchemy import and_, desc, func, text
 import sqlalchemy as sa
+from sqlalchemy import and_, desc, func, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
@@ -269,7 +269,7 @@ class OptimizedStorageService(StorageService):
             List of trending posts with computed metrics
         """
         self._log_query(f"get_trending_posts_optimized(subreddit={subreddit})")
-        
+
         # Enable query logging for debugging
         self.enable_query_logging(True)
 
@@ -278,7 +278,7 @@ class OptimizedStorageService(StorageService):
             logger.debug(f"Cutoff time: {cutoff_time}, time_window_hours: {time_window_hours}")
 
             # Use subquery to calculate engagement metrics efficiently
-            # SQLite-compatible age calculation using STRFTIME
+            # PostgreSQL-compatible age calculation
             subquery = (
                 self.session.query(
                     RedditPost.post_id,
@@ -287,7 +287,7 @@ class OptimizedStorageService(StorageService):
                     RedditPost.created_utc,
                     func.count(Comment.id).label('actual_comments'),
                     func.cast(
-                        func.strftime('%s', 'now') - func.strftime('%s', RedditPost.created_utc),
+                        (func.extract('epoch', func.now()) - func.extract('epoch', RedditPost.created_utc)),
                         sa.Integer
                     ).label('age_seconds')
                 )
@@ -306,7 +306,7 @@ class OptimizedStorageService(StorageService):
             # Calculate trending score using database functions
             # Use CASE statement for SQLite compatibility (replaces greatest function)
             from sqlalchemy import case
-            
+
             # Handle potential None values in age and score calculations
             safe_age_seconds = case(
                 (subquery.c.age_seconds.is_(None), 3600),  # Default to 1 hour if None
@@ -317,12 +317,12 @@ class OptimizedStorageService(StorageService):
                 (age_hours < 1, 1),
                 else_=age_hours
             )
-            
+
             safe_score = case(
                 (subquery.c.score.is_(None), 0),  # Default to 0 if None
                 else_=subquery.c.score
             )
-            
+
             trending_posts = (
                 self.session.query(
                     subquery.c.post_id,
@@ -342,12 +342,12 @@ class OptimizedStorageService(StorageService):
             for row in trending_posts:
                 # Debug null values
                 logger.debug(f"Row values: post_id={row.post_id}, score={row.score}, age_seconds={row.age_seconds}, trending_score={row.trending_score}")
-                
+
                 # Handle potential None values safely
                 age_seconds = row.age_seconds if row.age_seconds is not None else 0
                 age_hours = age_seconds / 3600
                 trending_score = row.trending_score if row.trending_score is not None else 0.0
-                
+
                 results.append({
                     'post_id': row.post_id,
                     'score': row.score or 0,
