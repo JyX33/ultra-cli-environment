@@ -35,7 +35,7 @@ class TestRedditService:
         mock_reddit.assert_called_once()
 
         # Verify that the search method was called with correct parameters
-        mock_reddit_instance.subreddits.search.assert_called_once_with("test topic", limit=10)
+        mock_reddit_instance.subreddits.search.assert_called_once_with("test topic", limit=25)
 
         # Verify that the method returns the expected list of mock objects
         assert result == mock_subreddit_list
@@ -257,8 +257,8 @@ class TestRedditService:
         # Verify that subreddit was called with correct name
         mock_reddit_instance.subreddit.assert_called_once_with("testsub")
 
-        # Verify that top() was called with correct parameters
-        mock_subreddit.top.assert_called_once_with(time_filter='day', limit=50)
+        # Verify that top() was called with correct parameters  
+        mock_subreddit.top.assert_called_once_with(time_filter='day', limit=15)
 
         # Assert that the returned list contains exactly 5 posts
         assert len(result) == 5, f"Expected 5 posts, got {len(result)}"

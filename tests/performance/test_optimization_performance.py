@@ -206,7 +206,7 @@ class TestQueryOptimization:
             performance_metrics.record_memory_snapshot()
 
             start_time = time.perf_counter()
-            session.execute(text("SELECT 1")).rowcount  # Reset counter reference
+            _ = session.execute(text("SELECT 1")).rowcount  # Reset counter reference
 
             # This should use efficient joins, not N+1 queries
             posts_with_comments = []

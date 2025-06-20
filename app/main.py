@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 from prawcore.exceptions import Forbidden, NotFound
 from sqlalchemy.orm import Session
 
+from app.core.config import config
 from app.db.session import get_db
 from app.models.api_models import (
     CommentUpdateResponse,
@@ -43,6 +44,9 @@ logging.getLogger("app.services.reddit_service").setLevel(logging.DEBUG)
 
 logger = logging.getLogger(__name__)
 
+# Validate configuration at startup to prevent runtime failures
+config.validate_all()
+
 app = FastAPI(
     title="AI Reddit News Agent",
     description="Automated Reddit content analysis and reporting",
@@ -52,7 +56,9 @@ reddit_service = RedditService()
 
 def validate_input_string(input_str: str, param_name: str) -> str:
     """
-    Validate input string to prevent injection attacks.
+    Validate input string for Reddit topic/subreddit parameters.
+
+    Focused validation for Reddit-specific inputs while preventing genuine security threats.
 
     Args:
         input_str: The input string to validate
@@ -69,16 +75,15 @@ def validate_input_string(input_str: str, param_name: str) -> str:
             status_code=422, detail=f"Invalid {param_name}: must be a non-empty string"
         )
 
-    # Check for common injection patterns
+    # Check for genuinely dangerous patterns - refined for Reddit context
     dangerous_patterns = [
-        r"[<>\"'`]",  # HTML/JS injection
-        r"(?i)(script|javascript|vbscript)",  # Script injection
-        r"(?i)(drop|delete|insert|update|select|union|exec|execute)",  # SQL injection
-        r"(?i)(file|ftp|http|https|ldap|gopher)://",  # Protocol injection
+        r"(?i)(script|javascript|vbscript|onload|onerror)",  # Script injection attempts
+        r"(?i)(drop|delete|insert|update|select|union|exec|execute)\s+(table|from|into)",  # SQL injection with context
         r"(?i)(\$\{|\{\{|%\{)",  # Template injection
         r"\.\.+[/\\]",  # Path traversal
-        r"(?i)(etc/passwd|/etc/shadow|proc/self)",  # System file access
-        r"[;&|`$()]",  # Command injection
+        r"(?i)(etc/passwd|/etc/shadow|proc/self|windows/system32)",  # System file access
+        r"[;&|`]+\s*(rm|del|format|shutdown|reboot)",  # Command injection with dangerous commands
+        r"<\s*script\s*>",  # HTML script tags
     ]
 
     for pattern in dangerous_patterns:
@@ -88,11 +93,18 @@ def validate_input_string(input_str: str, param_name: str) -> str:
                 detail=f"Invalid {param_name}: contains potentially malicious content",
             )
 
-    # Length validation
-    if len(input_str) > 100:
+    # Length validation - more reasonable for Reddit topics/subreddits
+    if len(input_str) > 200:
         raise HTTPException(
             status_code=422,
-            detail=f"Invalid {param_name}: too long (max 100 characters)",
+            detail=f"Invalid {param_name}: too long (max 200 characters)",
+        )
+
+    # Check for null bytes and control characters that shouldn't be in text
+    if '\x00' in input_str or any(ord(c) < 32 and c not in ['\t', '\n', '\r'] for c in input_str):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid {param_name}: contains control characters",
         )
 
     return input_str.strip()

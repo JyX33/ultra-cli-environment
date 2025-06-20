@@ -50,8 +50,11 @@ def score_and_rank_subreddits(subreddits: list, topic: str, reddit_service: 'Red
             }
             scored_subreddits.append(scored_subreddit)
 
-        except Exception:
+        except Exception as e:
             # If we can't fetch posts for a subreddit, skip it
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Failed to fetch posts for subreddit {subreddit.display_name}: {e}")
             continue
 
     # Sort by score in descending order

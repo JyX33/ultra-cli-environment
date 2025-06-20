@@ -148,8 +148,8 @@ class TestMemoryEfficientCommentProcessing:
         # Mock the get_top_comments method directly
         service.get_top_comments = Mock(return_value=large_comments)
 
-        # Should terminate early due to memory limit
-        result = process_comments_stream("test_post_id", service, max_memory_mb=0.5, top_count=20)
+        # Should terminate early due to memory limit (use smaller limit for accurate estimation)
+        result = process_comments_stream("test_post_id", service, max_memory_mb=0.01, top_count=20)
 
         # Should return fewer comments than requested due to memory limit
         assert len(result) < 20

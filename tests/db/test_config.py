@@ -2,6 +2,7 @@
 # ABOUTME: Validates SQLite and PostgreSQL connection setup with proper session handling
 
 import os
+from pathlib import Path
 import tempfile
 from unittest.mock import patch
 
@@ -33,8 +34,9 @@ def test_sqlite_connection_creation():
 
     finally:
         # Cleanup
-        if os.path.exists(temp_db_path):
-            os.unlink(temp_db_path)
+        temp_path = Path(temp_db_path)
+        if temp_path.exists():
+            temp_path.unlink()
 
 
 def test_postgresql_connection_creation():
@@ -106,10 +108,9 @@ def test_session_lifecycle_management():
     assert isinstance(db, Session)
 
     # Test cleanup via generator
-    try:
+    import contextlib
+    with contextlib.suppress(StopIteration):
         next(db_generator)
-    except StopIteration:
-        pass  # Expected behavior
 
 
 def test_database_configuration_from_config():

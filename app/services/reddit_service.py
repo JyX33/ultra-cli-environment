@@ -1,109 +1,212 @@
 # ABOUTME: Reddit API service for fetching posts, comments, and subreddit data with PRAW
 # ABOUTME: Provides filtered content retrieval with media exclusion and relevance sorting
 
-import logging
 from typing import Any
 
 import praw
 from praw.exceptions import PRAWException
-from prawcore.exceptions import Forbidden, NotFound
+from prawcore.exceptions import Forbidden, NotFound, ResponseException
 
 from app.core.config import config
+from app.core.error_handling import log_service_error, reddit_error_handler
+from app.core.exceptions import (
+    MissingConfigurationError,
+    RateLimitExceededError,
+    RedditAuthenticationError,
+    RedditPermissionError,
+    RedditRateLimitError,
+    create_error_context,
+    wrap_external_error,
+)
+from app.core.structured_logging import get_logger, log_service_operation
+from app.services.rate_limit_service import get_rate_limiter
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class RedditService:
     """Service class for interacting with the Reddit API."""
+
+    # Media content exclusion constants
+    MEDIA_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.gif', '.mp4')
+    MEDIA_DOMAINS = ('i.redd.it', 'v.redd.it', 'i.imgur.com')
 
     def __init__(self) -> None:
         """Initialize the Reddit service with authenticated PRAW client."""
         # Validate environment variables
         self._validate_config()
 
-        logger.info("Initializing Reddit API client")
-        logger.debug(f"Reddit Client ID: {config.REDDIT_CLIENT_ID[:8]}..." if config.REDDIT_CLIENT_ID else "None")
-        logger.debug(f"Reddit User Agent: {config.REDDIT_USER_AGENT}")
+        log_service_operation(logger, "RedditService", "initialize")
+
+        # Get Reddit configuration
+        reddit_config = config.get_reddit_config()
 
         try:
+            # Create PRAW client
             self.reddit = praw.Reddit(
-                client_id=config.REDDIT_CLIENT_ID,
-                client_secret=config.REDDIT_CLIENT_SECRET,
-                user_agent=config.REDDIT_USER_AGENT,
-                username="JyXAgent"
+                client_id=reddit_config.client_id,
+                client_secret=reddit_config.client_secret,
+                user_agent=reddit_config.user_agent,
+                username=reddit_config.username,
+                timeout=reddit_config.api_timeout
             )
 
-            # Test the connection
-            self._test_connection()
-            logger.info("Reddit API client initialized successfully")
+            # Initialize rate limiter for Reddit API calls
+            self.rate_limiter = get_rate_limiter("reddit")
 
         except Exception as e:
-            logger.error(f"Failed to initialize Reddit API client: {type(e).__name__}: {e}")
-            raise RuntimeError(f"Reddit API initialization failed: {e}") from e
+            # Log and handle PRAW client creation errors
+            log_service_error(e, "RedditService", "initialize")
+            raise wrap_external_error(
+                e, RedditAuthenticationError,
+                "Failed to initialize Reddit API client",
+                "REDDIT_INIT_FAILED",
+                create_error_context(username=reddit_config.username)
+            ) from e
+
+        # Test the connection - @reddit_error_handler will handle any errors from this
+        self._test_connection()
+
+        log_service_operation(
+            logger, "RedditService", "initialize_success",
+            username=reddit_config.username,
+            timeout=reddit_config.api_timeout,
+            rate_limiting_enabled=self.rate_limiter.enabled
+        )
 
     def _validate_config(self) -> None:
         """Validate that all required Reddit API configuration is present."""
-        missing_vars = []
+        try:
+            config.validate_all()
+            log_service_operation(logger, "RedditService", "config_validation_success")
+        except ValueError as e:
+            log_service_error(e, "RedditService", "config_validation")
+            raise MissingConfigurationError(
+                str(e),
+                "REDDIT_CONFIG_MISSING"
+            ) from e
 
-        if not config.REDDIT_CLIENT_ID:
-            missing_vars.append("REDDIT_CLIENT_ID")
-        if not config.REDDIT_CLIENT_SECRET:
-            missing_vars.append("REDDIT_CLIENT_SECRET")
-        if not config.REDDIT_USER_AGENT:
-            missing_vars.append("REDDIT_USER_AGENT")
+    def _check_rate_limit(self, operation: str) -> None:
+        """
+        Check rate limits before making Reddit API calls.
 
-        if missing_vars:
-            error_msg = f"Missing required Reddit API environment variables: {', '.join(missing_vars)}"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
+        Args:
+            operation: Name of the operation being performed
 
-        logger.info("Reddit API configuration validation passed")
+        Raises:
+            RateLimitExceededError: If rate limit would be exceeded
+        """
+        try:
+            self.rate_limiter.check_rate_limit(tokens=1.0, request_tokens=1)
+            logger.debug(f"Rate limit check passed for {operation}")
+        except RateLimitExceededError as e:
+            log_service_operation(
+                logger, "RedditService", "rate_limit_exceeded",
+                error=str(e), operation_name=operation
+            )
+            raise
 
+    @reddit_error_handler
     def _test_connection(self) -> None:
         """Test the Reddit API connection by making a simple authenticated request."""
+        log_service_operation(logger, "RedditService", "test_connection")
+
         try:
             # Test authentication by accessing read-only info
-            logger.info("Testing Reddit API connection...")
             user = self.reddit.user.me()
 
             if user is None:
                 # This means we're using a script application (read-only), which is expected
-                logger.info("Reddit API connection successful (read-only script application)")
+                log_service_operation(logger, "RedditService", "connection_success", type="read-only")
             else:
-                logger.info(f"Reddit API connection successful (authenticated as: {user.name})")
+                log_service_operation(
+                    logger, "RedditService", "connection_success",
+                    type="authenticated", username=user.name
+                )
 
-        except PRAWException as e:
-            logger.error(f"Reddit API connection test failed: {type(e).__name__}: {e}")
-            raise RuntimeError(f"Reddit API authentication failed: {e}") from e
-        except Exception as e:
-            logger.error(f"Reddit API connection test failed with unexpected error: {type(e).__name__}: {e}")
-            raise RuntimeError(f"Reddit API connection failed: {e}") from e
+        except Forbidden as e:
+            raise wrap_external_error(
+                e, RedditPermissionError,
+                "Reddit API access forbidden - check credentials",
+                "REDDIT_ACCESS_FORBIDDEN"
+            ) from e
+        except ResponseException as e:
+            if e.response.status_code == 401:
+                raise wrap_external_error(
+                    e, RedditAuthenticationError,
+                    "Reddit API authentication failed - invalid credentials",
+                    "REDDIT_AUTH_INVALID"
+                ) from e
+            elif e.response.status_code == 429:
+                raise wrap_external_error(
+                    e, RedditRateLimitError,
+                    "Reddit API rate limit exceeded during connection test",
+                    "REDDIT_RATE_LIMIT_INIT"
+                ) from e
+            else:
+                raise wrap_external_error(
+                    e, RedditAuthenticationError,
+                    f"Reddit API connection failed with status {e.response.status_code}",
+                    "REDDIT_CONNECTION_FAILED",
+                    create_error_context(status_code=e.response.status_code)
+                ) from e
 
-    def search_subreddits(self, topic: str, limit: int = 10) -> list:
+    @reddit_error_handler
+    def search_subreddits(self, topic: str, limit: int | None = None) -> list:
         """
         Search for subreddits related to a given topic.
 
         Args:
             topic (str): The topic to search for
-            limit (int): Maximum number of subreddits to return (default: 10)
+            limit (int | None): Maximum number of subreddits to return (default: from config)
 
         Returns:
             list: List of subreddit objects matching the topic
         """
-        return list(self.reddit.subreddits.search(topic, limit=limit))
+        if limit is None:
+            limit = config.REDDIT_HOT_POSTS_LIMIT
 
-    def get_hot_posts(self, subreddit_name: str, limit: int = 25) -> list:
+        log_service_operation(
+            logger, "RedditService", "search_subreddits",
+            topic=topic, limit=limit
+        )
+
+        # Check rate limits before making API call
+        self._check_rate_limit("search_subreddits")
+
+        try:
+            subreddits = list(self.reddit.subreddits.search(topic, limit=limit))
+            log_service_operation(
+                logger, "RedditService", "search_subreddits_success",
+                topic=topic, found_count=len(subreddits)
+            )
+            return subreddits
+        except Exception:
+            # Let @reddit_error_handler decorator handle error logging and exception mapping
+            raise
+
+    @reddit_error_handler
+    def get_hot_posts(self, subreddit_name: str, limit: int | None = None) -> list:
         """
         Get hot posts from a specific subreddit.
 
         Args:
             subreddit_name (str): Name of the subreddit
-            limit (int): Maximum number of posts to return (default: 25)
+            limit (int | None): Maximum number of posts to return (default: from config)
 
         Returns:
             list: List of hot post objects from the subreddit
         """
-        logger.debug(f"Fetching {limit} hot posts from r/{subreddit_name}")
+        if limit is None:
+            limit = config.REDDIT_HOT_POSTS_LIMIT
+
+        log_service_operation(
+            logger, "RedditService", "get_hot_posts",
+            subreddit=subreddit_name, limit=limit
+        )
+
+        # Check rate limits before making API call
+        self._check_rate_limit("get_hot_posts")
 
         try:
             subreddit = self.reddit.subreddit(subreddit_name)
@@ -111,31 +214,26 @@ class RedditService:
             # Check if subreddit exists and is accessible
             try:
                 subreddit_display_name = subreddit.display_name
-                logger.debug(f"Subreddit r/{subreddit_name} is accessible as r/{subreddit_display_name}")
-            except Exception as e:
-                logger.error(f"Cannot access subreddit r/{subreddit_name}: {type(e).__name__}: {e}")
-                return []
+                log_service_operation(
+                    logger, "RedditService", "subreddit_access_success",
+                    requested_name=subreddit_name, actual_name=subreddit_display_name
+                )
+            except (Forbidden, NotFound):
+                # Let @reddit_error_handler decorator handle error logging and exception mapping
+                raise
 
             # Fetch hot posts
             hot_posts = list(subreddit.hot(limit=limit))
-            logger.debug(f"Successfully retrieved {len(hot_posts)} hot posts from r/{subreddit_name}")
-
-            # Log sample post titles for debugging
-            if hot_posts:
-                logger.debug(f"Sample posts from r/{subreddit_name}:")
-                for i, post in enumerate(hot_posts[:3]):
-                    logger.debug(f"  {i+1}. '{post.title}'")
-            else:
-                logger.warning(f"No hot posts found in r/{subreddit_name}")
+            log_service_operation(
+                logger, "RedditService", "get_hot_posts_success",
+                subreddit=subreddit_name, posts_found=len(hot_posts)
+            )
 
             return hot_posts
 
-        except PRAWException as e:
-            logger.error(f"PRAW error getting hot posts from r/{subreddit_name}: {type(e).__name__}: {e}")
-            return []
-        except Exception as e:
-            logger.error(f"Unexpected error getting hot posts from r/{subreddit_name}: {type(e).__name__}: {e}")
-            return []
+        except Exception:
+            # Let @reddit_error_handler decorator handle error logging and exception mapping
+            raise
 
     def get_relevant_posts(self, subreddit_name: str) -> list:
         """
@@ -145,45 +243,31 @@ class RedditService:
             subreddit_name (str): Name of the subreddit
 
         Returns:
-            list: List of 5 valid post objects sorted by comment count
+            list: List of valid post objects sorted by comment count (up to max_valid_posts)
         """
+        # Check rate limits before making API call
+        self._check_rate_limit("get_relevant_posts")
+
+        # Get Reddit configuration
+        reddit_config = config.get_reddit_config()
+
         # Fetch top posts from the last day (generous limit for sorting)
         subreddit = self.reddit.subreddit(subreddit_name)
-        posts = list(subreddit.top(time_filter='day', limit=50))
+        posts = list(subreddit.top(time_filter='day', limit=reddit_config.relevant_posts_limit))
 
         # Sort posts by number of comments in descending order
         posts.sort(key=lambda post: post.num_comments, reverse=True)
-
-        # Media file extensions to exclude
-        media_extensions = ('.jpg', '.jpeg', '.png', '.gif', '.mp4')
-        media_domains = ('i.redd.it', 'v.redd.it', 'i.imgur.com')
 
         valid_posts: list[Any] = []
 
         # Iterate through sorted posts and filter for valid ones
         for post in posts:
             # Check if we have enough valid posts
-            if len(valid_posts) >= 5:
+            if len(valid_posts) >= reddit_config.max_valid_posts:
                 break
 
-            # Validate post according to FR-06
-            is_valid = False
-
-            # Text posts are always valid
-            if post.is_self:
-                is_valid = True
-            else:
-                # For link posts, check if URL is not a media file or from media domains
-                post_url = post.url.lower()
-
-                # Check if URL ends with media extensions
-                if not post_url.endswith(media_extensions):
-                    # Check if URL is from media domains
-                    is_media_domain = any(domain in post_url for domain in media_domains)
-                    if not is_media_domain:
-                        is_valid = True
-
-            if is_valid:
+            # Validate post using class constants
+            if self._is_valid_post(post):
                 valid_posts.append(post)
 
         return valid_posts
@@ -208,28 +292,27 @@ class RedditService:
             Forbidden: When the subreddit is private or restricted
             PRAWException: For other Reddit API errors
         """
+        # Check rate limits before making API call
+        self._check_rate_limit("get_relevant_posts_optimized")
+
         try:
             # Fetch fewer posts initially - optimization reduces API load
             subreddit = self.reddit.subreddit(subreddit_name)
-            posts = list(subreddit.top(time_filter='day', limit=15))
+            posts = list(subreddit.top(time_filter='day', limit=config.REDDIT_RELEVANT_POSTS_LIMIT))
 
             # Sort posts by number of comments in descending order
             posts.sort(key=lambda post: post.num_comments, reverse=True)
-
-            # Media file extensions and domains to exclude
-            media_extensions = ('.jpg', '.jpeg', '.png', '.gif', '.mp4')
-            media_domains = ('i.redd.it', 'v.redd.it', 'i.imgur.com')
 
             valid_posts: list[Any] = []
 
             # Process posts with early termination for efficiency
             for post in posts:
                 # Early termination - stop when we have enough valid posts
-                if len(valid_posts) >= 5:
+                if len(valid_posts) >= config.REDDIT_MAX_VALID_POSTS:
                     break
 
-                # Optimized validation logic
-                if self._is_valid_post(post, media_extensions, media_domains):
+                # Optimized validation logic using class constants
+                if self._is_valid_post(post):
                     valid_posts.append(post)
 
             return valid_posts
@@ -247,17 +330,15 @@ class RedditService:
             logger.error(f"Unexpected error getting posts from r/{subreddit_name}: {type(e).__name__}: {e}")
             raise
 
-    def _is_valid_post(self, post: Any, media_extensions: tuple, media_domains: tuple) -> bool:
+    def _is_valid_post(self, post: Any) -> bool:
         """
-        Optimized helper method to validate post content type.
+        Helper method to validate post content type using class constants.
 
         Args:
             post: Reddit post object
-            media_extensions: Tuple of media file extensions to exclude
-            media_domains: Tuple of media domains to exclude
 
         Returns:
-            bool: True if post is valid for processing
+            bool: True if post is valid for processing (not media content)
         """
         # Text posts are always valid
         if post.is_self:
@@ -267,26 +348,42 @@ class RedditService:
         post_url = post.url.lower()
 
         # Quick exclusion checks - most efficient first
-        if post_url.endswith(media_extensions):
+        if post_url.endswith(self.MEDIA_EXTENSIONS):
             return False
 
         # Check media domains
-        return not any(domain in post_url for domain in media_domains)
+        return not any(domain in post_url for domain in self.MEDIA_DOMAINS)
 
-    def get_top_comments(self, post_id: str, limit: int = 15) -> list:
+    @reddit_error_handler
+    def get_top_comments(self, post_id: str, limit: int | None = None) -> list[Any]:
         """
         Get top comments from a specific post.
 
         Args:
             post_id (str): The ID of the post
-            limit (int): Maximum number of comments to return (default: 15)
+            limit (int | None): Maximum number of comments to return (default: from config)
 
         Returns:
             list: List of top comment objects from the post
         """
+        if limit is None:
+            limit = config.REDDIT_TOP_COMMENTS_LIMIT
+
+        log_service_operation(
+            logger, "RedditService", "get_top_comments",
+            post_id=post_id, limit=limit
+        )
+
+        # Check rate limits before making API call
+        self._check_rate_limit("get_top_comments")
+
         submission = self.reddit.submission(id=post_id)
         # Replace MoreComments objects and get top-level comments
         submission.comments.replace_more(limit=0)
-        # Sort comments by score and return top ones
-        top_comments = sorted(submission.comments, key=lambda x: x.score, reverse=True)
+        # Convert CommentForest to list for sorting and slicing
+        # CommentForest is iterable but doesn't have proper type annotations
+        comment_list: list[Any] = []
+        for comment in submission.comments:
+            comment_list.append(comment)
+        top_comments = sorted(comment_list, key=lambda x: x.score, reverse=True)
         return top_comments[:limit]

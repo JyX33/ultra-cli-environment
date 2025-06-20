@@ -2,6 +2,7 @@
 # ABOUTME: Provides utilities for processing large comment threads without memory exhaustion
 
 from collections.abc import Generator
+import sys
 
 from app.services.reddit_service import RedditService
 
@@ -33,8 +34,9 @@ class CommentMemoryTracker:
         if comment_text is None:
             return False
 
-        # Estimate memory usage (approximate: UTF-8 encoding + Python object overhead)
-        estimated_size = len(comment_text.encode('utf-8')) * 10  # Very conservative estimate
+        # Accurate memory estimation using sys.getsizeof for Python object overhead
+        # plus UTF-8 byte length for the actual string content
+        estimated_size = sys.getsizeof(comment_text) + len(comment_text.encode('utf-8'))
 
         return (self.current_memory_bytes + estimated_size) <= self.max_memory_bytes
 
@@ -46,7 +48,8 @@ class CommentMemoryTracker:
             comment_text: The comment text being added
         """
         if comment_text is not None:
-            comment_size = len(comment_text.encode('utf-8')) * 10
+            # Use the same accurate memory estimation as can_add_comment
+            comment_size = sys.getsizeof(comment_text) + len(comment_text.encode('utf-8'))
             self.current_memory_bytes += comment_size
             self.comment_count += 1
 

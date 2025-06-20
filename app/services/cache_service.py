@@ -2,25 +2,109 @@
 # ABOUTME: Provides cache invalidation, TTL management, and hit rate monitoring
 
 import contextlib
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 import json
 import logging
 import time
 from typing import Any
 
-# Set up logging
-logger = logging.getLogger(__name__)
+from app.core.structured_logging import (
+    get_logger,
+    log_error_with_context,
+    log_service_operation,
+)
+
+# Set up structured logging
+logger = get_logger(__name__)
+
+
+def _sanitize_cache_key_for_logging(cache_key: str) -> str:
+    """Sanitize cache key for secure logging by obscuring sensitive data.
+
+    This function masks potentially sensitive information in cache keys
+    to prevent data leakage in logs while preserving useful debugging info.
+
+    Args:
+        cache_key: The cache key to sanitize
+
+    Returns:
+        Sanitized cache key safe for logging
+    """
+    if not cache_key:
+        return "<empty_key>"
+
+    # Split key by common delimiters to identify segments
+    parts = cache_key.split(':')
+
+    if len(parts) < 2:
+        # Simple key without delimiters - mask middle part
+        if len(cache_key) <= 6:
+            return cache_key[:2] + "***"
+        return cache_key[:3] + "***" + cache_key[-3:]
+
+    # For structured keys like "post:abc123" or "subreddit_posts:python"
+    sanitized_parts = []
+    for i, part in enumerate(parts):
+        if i == 0:
+            # Keep the first part (operation type) for debugging
+            sanitized_parts.append(part)
+        elif len(part) <= 4:
+            # Short identifiers - mask partially
+            sanitized_parts.append(part[:1] + "***")
+        else:
+            # Longer identifiers - show prefix and suffix
+            sanitized_parts.append(part[:2] + "***" + part[-2:])
+
+    return ':'.join(sanitized_parts)
+
+
+@dataclass
+class CachePerformanceMetrics:
+    """Detailed performance metrics for cache operations."""
+    operation_type: str
+    count: int = 0
+    total_duration_ms: float = 0.0
+    min_duration_ms: float = float('inf')
+    max_duration_ms: float = 0.0
+    avg_duration_ms: float = 0.0
+    last_operation_time: float = 0.0
+
+    def record_operation(self, duration_ms: float) -> None:
+        """Record a cache operation with its duration."""
+        self.count += 1
+        self.total_duration_ms += duration_ms
+        self.min_duration_ms = min(self.min_duration_ms, duration_ms)
+        self.max_duration_ms = max(self.max_duration_ms, duration_ms)
+        self.avg_duration_ms = self.total_duration_ms / self.count
+        self.last_operation_time = time.time()
 
 
 @dataclass
 class CacheStats:
-    """Statistics for cache performance monitoring."""
+    """Enhanced statistics for cache performance monitoring and alerting."""
     hits: int = 0
     misses: int = 0
     total_requests: int = 0
     hit_rate: float = 0.0
     memory_usage_mb: float = 0.0
     oldest_entry_age_seconds: float = 0.0
+
+    # Enhanced performance metrics
+    average_get_time_ms: float = 0.0
+    average_set_time_ms: float = 0.0
+    slow_operations_count: int = 0
+    evictions_count: int = 0
+    expired_entries_cleaned: int = 0
+
+    # Performance thresholds and alerts
+    performance_warnings: list[str] = field(default_factory=list)
+    cache_efficiency_score: float = 0.0
+    memory_pressure_level: str = "normal"  # normal, moderate, high, critical
+
+    # Historical tracking
+    peak_memory_usage_mb: float = 0.0
+    requests_per_second: float = 0.0
+    cache_utilization_percent: float = 0.0
 
 
 @dataclass
@@ -49,10 +133,10 @@ class CacheEntry:
 
 
 class InMemoryCache:
-    """High-performance in-memory cache with TTL and eviction policies."""
+    """High-performance in-memory cache with TTL, eviction policies, and performance monitoring."""
 
     def __init__(self, max_size: int = 1000, default_ttl: int = 300):
-        """Initialize in-memory cache.
+        """Initialize in-memory cache with performance monitoring.
 
         Args:
             max_size: Maximum number of entries to store
@@ -63,8 +147,26 @@ class InMemoryCache:
         self._cache: dict[str, CacheEntry] = {}
         self._stats = CacheStats()
 
+        # Performance monitoring
+        self._performance_metrics: dict[str, CachePerformanceMetrics] = {
+            'get': CachePerformanceMetrics('get'),
+            'set': CachePerformanceMetrics('set'),
+            'delete': CachePerformanceMetrics('delete'),
+            'eviction': CachePerformanceMetrics('eviction')
+        }
+
+        # Performance thresholds (configurable)
+        self._slow_operation_threshold_ms = 10.0  # Operations slower than 10ms are considered slow
+        self._memory_warning_threshold_mb = 100.0  # Warning at 100MB
+        self._memory_critical_threshold_mb = 250.0  # Critical at 250MB
+        self._low_hit_rate_threshold = 0.5  # Warning if hit rate below 50%
+
+        # Historical tracking
+        self._stats_reset_time = time.time()
+        self._peak_memory_usage = 0.0
+
     def get(self, key: str) -> Any | None:
-        """Get value from cache.
+        """Get value from cache with performance monitoring.
 
         Args:
             key: Cache key
@@ -72,27 +174,43 @@ class InMemoryCache:
         Returns:
             Cached value or None if not found/expired
         """
-        self._stats.total_requests += 1
+        start_time = time.time()
 
-        if key not in self._cache:
-            self._stats.misses += 1
+        try:
+            self._stats.total_requests += 1
+
+            if key not in self._cache:
+                self._stats.misses += 1
+                self._update_hit_rate()
+                return None
+
+            entry = self._cache[key]
+
+            if entry.is_expired():
+                del self._cache[key]
+                self._stats.misses += 1
+                self._update_hit_rate()
+                return None
+
+            entry.touch()
+            self._stats.hits += 1
             self._update_hit_rate()
-            return None
 
-        entry = self._cache[key]
+            log_service_operation(
+                logger, "InMemoryCache", "cache_hit",
+                cache_key=_sanitize_cache_key_for_logging(key),
+                hit_rate=self._stats.hit_rate
+            )
+            return entry.value
 
-        if entry.is_expired():
-            del self._cache[key]
-            self._stats.misses += 1
-            self._update_hit_rate()
-            return None
+        finally:
+            # Record performance metrics
+            duration_ms = (time.time() - start_time) * 1000
+            self._performance_metrics['get'].record_operation(duration_ms)
 
-        entry.touch()
-        self._stats.hits += 1
-        self._update_hit_rate()
-
-        logger.debug(f"Cache hit for key: {key}")
-        return entry.value
+            # Track slow operations
+            if duration_ms > self._slow_operation_threshold_ms:
+                self._stats.slow_operations_count += 1
 
     def set(
         self,
@@ -100,31 +218,48 @@ class InMemoryCache:
         value: Any,
         ttl: int | None = None
     ) -> None:
-        """Set value in cache.
+        """Set value in cache with performance monitoring.
 
         Args:
             key: Cache key
             value: Value to cache
             ttl: TTL in seconds (None = use default)
         """
-        if ttl is None:
-            ttl = self.default_ttl if self.default_ttl > 0 else None
+        start_time = time.time()
 
-        # Evict old entries if at capacity
-        if len(self._cache) >= self.max_size and key not in self._cache:
-            self._evict_lru()
+        try:
+            if ttl is None:
+                ttl = self.default_ttl if self.default_ttl > 0 else None
 
-        entry = CacheEntry(
-            value=value,
-            created_at=time.time(),
-            ttl_seconds=ttl
-        )
+            # Evict old entries if at capacity
+            if len(self._cache) >= self.max_size and key not in self._cache:
+                self._evict_lru()
 
-        self._cache[key] = entry
-        logger.debug(f"Cached value for key: {key} (TTL: {ttl}s)")
+            entry = CacheEntry(
+                value=value,
+                created_at=time.time(),
+                ttl_seconds=ttl
+            )
+
+            self._cache[key] = entry
+            log_service_operation(
+                logger, "InMemoryCache", "cache_set",
+                cache_key=_sanitize_cache_key_for_logging(key),
+                ttl_seconds=ttl,
+                cache_size=len(self._cache)
+            )
+
+        finally:
+            # Record performance metrics
+            duration_ms = (time.time() - start_time) * 1000
+            self._performance_metrics['set'].record_operation(duration_ms)
+
+            # Track slow operations
+            if duration_ms > self._slow_operation_threshold_ms:
+                self._stats.slow_operations_count += 1
 
     def delete(self, key: str) -> bool:
-        """Delete value from cache.
+        """Delete value from cache with performance monitoring.
 
         Args:
             key: Cache key to delete
@@ -132,20 +267,53 @@ class InMemoryCache:
         Returns:
             True if key was found and deleted
         """
-        if key in self._cache:
-            del self._cache[key]
-            logger.debug(f"Deleted cache key: {key}")
-            return True
-        return False
+        start_time = time.time()
+
+        try:
+            if key in self._cache:
+                del self._cache[key]
+                log_service_operation(
+                    logger, "InMemoryCache", "cache_delete",
+                    cache_key=_sanitize_cache_key_for_logging(key),
+                    cache_size=len(self._cache)
+                )
+                return True
+            return False
+
+        finally:
+            # Record performance metrics
+            duration_ms = (time.time() - start_time) * 1000
+            self._performance_metrics['delete'].record_operation(duration_ms)
+
+            # Track slow operations
+            if duration_ms > self._slow_operation_threshold_ms:
+                self._stats.slow_operations_count += 1
 
     def clear(self) -> None:
-        """Clear all cached values."""
+        """Clear all cached values and reset performance metrics."""
         self._cache.clear()
         self._stats = CacheStats()
-        logger.info("Cache cleared")
+
+        # Reset performance metrics
+        for metric in self._performance_metrics.values():
+            metric.count = 0
+            metric.total_duration_ms = 0.0
+            metric.min_duration_ms = float('inf')
+            metric.max_duration_ms = 0.0
+            metric.avg_duration_ms = 0.0
+            metric.last_operation_time = 0.0
+
+        self._stats_reset_time = time.time()
+        self._peak_memory_usage = 0.0
+
+        log_service_operation(
+            logger, "InMemoryCache", "cache_cleared",
+            previous_size=len(self._cache),
+            stats_reset=True
+        )
 
     def get_stats(self) -> CacheStats:
-        """Get cache performance statistics."""
+        """Get comprehensive cache performance statistics with monitoring and alerts."""
         # Update memory usage estimate
         try:
             import sys
@@ -154,6 +322,12 @@ class InMemoryCache:
                 for key, entry in self._cache.items()
             )
             self._stats.memory_usage_mb = total_size / 1024 / 1024
+
+            # Track peak memory usage
+            if self._stats.memory_usage_mb > self._peak_memory_usage:
+                self._peak_memory_usage = self._stats.memory_usage_mb
+            self._stats.peak_memory_usage_mb = self._peak_memory_usage
+
         except Exception:
             self._stats.memory_usage_mb = 0.0
 
@@ -164,10 +338,97 @@ class InMemoryCache:
         else:
             self._stats.oldest_entry_age_seconds = 0.0
 
+        # Update performance metrics
+        self._stats.average_get_time_ms = self._performance_metrics['get'].avg_duration_ms
+        self._stats.average_set_time_ms = self._performance_metrics['set'].avg_duration_ms
+
+        # Calculate cache utilization
+        self._stats.cache_utilization_percent = (len(self._cache) / self.max_size) * 100
+
+        # Calculate requests per second
+        time_since_reset = time.time() - self._stats_reset_time
+        if time_since_reset > 0:
+            self._stats.requests_per_second = self._stats.total_requests / time_since_reset
+
+        # Performance analysis and warnings
+        self._stats.performance_warnings = []
+
+        # Memory pressure analysis
+        if self._stats.memory_usage_mb >= self._memory_critical_threshold_mb:
+            self._stats.memory_pressure_level = "critical"
+            self._stats.performance_warnings.append(
+                f"Critical memory usage: {self._stats.memory_usage_mb:.1f}MB >= {self._memory_critical_threshold_mb}MB"
+            )
+        elif self._stats.memory_usage_mb >= self._memory_warning_threshold_mb:
+            self._stats.memory_pressure_level = "high"
+            self._stats.performance_warnings.append(
+                f"High memory usage: {self._stats.memory_usage_mb:.1f}MB >= {self._memory_warning_threshold_mb}MB"
+            )
+        elif self._stats.memory_usage_mb >= self._memory_warning_threshold_mb * 0.75:
+            self._stats.memory_pressure_level = "moderate"
+        else:
+            self._stats.memory_pressure_level = "normal"
+
+        # Hit rate analysis
+        if self._stats.hit_rate < self._low_hit_rate_threshold:
+            self._stats.performance_warnings.append(
+                f"Low cache hit rate: {self._stats.hit_rate:.2%} < {self._low_hit_rate_threshold:.2%}"
+            )
+
+        # Slow operations analysis
+        total_operations = sum(metric.count for metric in self._performance_metrics.values())
+        if total_operations > 0:
+            slow_operation_rate = self._stats.slow_operations_count / total_operations
+            if slow_operation_rate > 0.1:  # More than 10% slow operations
+                self._stats.performance_warnings.append(
+                    f"High slow operation rate: {slow_operation_rate:.2%} of operations exceed {self._slow_operation_threshold_ms}ms"
+                )
+
+        # Cache efficiency score calculation
+        efficiency_factors = []
+
+        # Hit rate factor (0-40 points)
+        hit_rate_score = min(self._stats.hit_rate * 40, 40)
+        efficiency_factors.append(hit_rate_score)
+
+        # Memory efficiency factor (0-30 points)
+        if self._stats.cache_utilization_percent > 0:
+            # Optimal utilization is around 70-80%
+            optimal_utilization = 75.0
+            utilization_diff = abs(self._stats.cache_utilization_percent - optimal_utilization)
+            memory_score = max(0, 30 - (utilization_diff / 100 * 30))
+        else:
+            memory_score = 0
+        efficiency_factors.append(memory_score)
+
+        # Performance factor (0-20 points)
+        avg_response_time = (self._stats.average_get_time_ms + self._stats.average_set_time_ms) / 2
+        if avg_response_time > 0:
+            # Target response time is under 5ms
+            performance_score = max(0, 20 - (avg_response_time / 5 * 20))
+        else:
+            performance_score = 20
+        efficiency_factors.append(performance_score)
+
+        # Stability factor (0-10 points)
+        if total_operations > 0:
+            stability_score = max(0, 10 - (slow_operation_rate * 10))
+        else:
+            stability_score = 10
+        efficiency_factors.append(stability_score)
+
+        self._stats.cache_efficiency_score = sum(efficiency_factors)
+
+        # Add efficiency warnings
+        if self._stats.cache_efficiency_score < 60:
+            self._stats.performance_warnings.append(
+                f"Low cache efficiency score: {self._stats.cache_efficiency_score:.1f}/100"
+            )
+
         return self._stats
 
     def cleanup_expired(self) -> int:
-        """Remove expired entries from cache.
+        """Remove expired entries from cache with performance tracking.
 
         Returns:
             Number of entries removed
@@ -180,28 +441,184 @@ class InMemoryCache:
         for key in expired_keys:
             del self._cache[key]
 
+        # Update statistics
+        self._stats.expired_entries_cleaned += len(expired_keys)
+
         if expired_keys:
-            logger.info(f"Cleaned up {len(expired_keys)} expired cache entries")
+            log_service_operation(
+                logger, "InMemoryCache", "expired_cleanup",
+                expired_count=len(expired_keys),
+                remaining_size=len(self._cache)
+            )
 
         return len(expired_keys)
 
     def _evict_lru(self) -> None:
-        """Evict least recently used entry."""
+        """Evict least recently used entry with performance tracking."""
         if not self._cache:
             return
 
-        lru_key = min(
-            self._cache.keys(),
-            key=lambda k: self._cache[k].last_accessed or 0.0
-        )
+        start_time = time.time()
 
-        del self._cache[lru_key]
-        logger.debug(f"Evicted LRU cache entry: {lru_key}")
+        try:
+            lru_key = min(
+                self._cache.keys(),
+                key=lambda k: self._cache[k].last_accessed or 0.0
+            )
+
+            del self._cache[lru_key]
+
+            # Update statistics
+            self._stats.evictions_count += 1
+
+            log_service_operation(
+                logger, "InMemoryCache", "lru_eviction",
+                evicted_key=_sanitize_cache_key_for_logging(lru_key),
+                cache_size=len(self._cache),
+                total_evictions=self._stats.evictions_count
+            )
+
+        finally:
+            # Record performance metrics
+            duration_ms = (time.time() - start_time) * 1000
+            self._performance_metrics['eviction'].record_operation(duration_ms)
+
+            # Track slow operations
+            if duration_ms > self._slow_operation_threshold_ms:
+                self._stats.slow_operations_count += 1
 
     def _update_hit_rate(self) -> None:
         """Update cache hit rate statistics."""
         if self._stats.total_requests > 0:
             self._stats.hit_rate = self._stats.hits / self._stats.total_requests
+
+    def get_detailed_performance_metrics(self) -> dict[str, Any]:
+        """Get detailed performance metrics for all cache operations.
+
+        Returns:
+            Dictionary with detailed performance data for analysis
+        """
+        return {
+            'operation_metrics': {
+                op_type: {
+                    'count': metric.count,
+                    'total_duration_ms': metric.total_duration_ms,
+                    'min_duration_ms': metric.min_duration_ms if metric.min_duration_ms != float('inf') else 0.0,
+                    'max_duration_ms': metric.max_duration_ms,
+                    'avg_duration_ms': metric.avg_duration_ms,
+                    'last_operation_time': metric.last_operation_time,
+                    'operations_per_second': metric.count / max((time.time() - self._stats_reset_time), 1)
+                }
+                for op_type, metric in self._performance_metrics.items()
+            },
+            'thresholds': {
+                'slow_operation_threshold_ms': self._slow_operation_threshold_ms,
+                'memory_warning_threshold_mb': self._memory_warning_threshold_mb,
+                'memory_critical_threshold_mb': self._memory_critical_threshold_mb,
+                'low_hit_rate_threshold': self._low_hit_rate_threshold
+            },
+            'configuration': {
+                'max_size': self.max_size,
+                'default_ttl': self.default_ttl,
+                'current_size': len(self._cache)
+            }
+        }
+
+    def get_performance_report(self) -> dict[str, Any]:
+        """Generate a comprehensive performance analysis report.
+
+        Returns:
+            Dictionary with performance analysis, recommendations, and insights
+        """
+        stats = self.get_stats()
+        detailed_metrics = self.get_detailed_performance_metrics()
+
+        # Analyze performance trends
+        total_operations = sum(metric.count for metric in self._performance_metrics.values())
+
+        # Generate recommendations
+        recommendations = []
+
+        if stats.hit_rate < 0.7:
+            recommendations.append("Consider increasing cache TTL or reviewing cache key strategy to improve hit rate")
+
+        if stats.cache_utilization_percent > 90:
+            recommendations.append("Cache is near capacity - consider increasing max_size to prevent frequent evictions")
+        elif stats.cache_utilization_percent < 30:
+            recommendations.append("Cache utilization is low - consider reducing max_size to optimize memory usage")
+
+        if stats.average_get_time_ms > 5.0:
+            recommendations.append("Get operations are slow - consider optimizing cache key structure or reducing memory pressure")
+
+        if stats.average_set_time_ms > 10.0:
+            recommendations.append("Set operations are slow - may indicate memory pressure or complex data serialization")
+
+        if stats.evictions_count > stats.expired_entries_cleaned * 2:
+            recommendations.append("High eviction rate compared to natural expiration - consider increasing cache size or TTL")
+
+        # Performance health assessment
+        health_score = stats.cache_efficiency_score
+        if health_score >= 80:
+            health_status = "excellent"
+        elif health_score >= 60:
+            health_status = "good"
+        elif health_score >= 40:
+            health_status = "fair"
+        else:
+            health_status = "poor"
+
+        return {
+            'summary': {
+                'health_status': health_status,
+                'efficiency_score': health_score,
+                'total_operations': total_operations,
+                'uptime_seconds': time.time() - self._stats_reset_time,
+                'memory_pressure': stats.memory_pressure_level
+            },
+            'key_metrics': {
+                'hit_rate': stats.hit_rate,
+                'requests_per_second': stats.requests_per_second,
+                'avg_response_time_ms': (stats.average_get_time_ms + stats.average_set_time_ms) / 2,
+                'memory_usage_mb': stats.memory_usage_mb,
+                'cache_utilization_percent': stats.cache_utilization_percent
+            },
+            'performance_warnings': stats.performance_warnings,
+            'recommendations': recommendations,
+            'detailed_metrics': detailed_metrics,
+            'generated_at': time.time()
+        }
+
+    def configure_performance_thresholds(
+        self,
+        slow_operation_ms: float | None = None,
+        memory_warning_mb: float | None = None,
+        memory_critical_mb: float | None = None,
+        low_hit_rate: float | None = None
+    ) -> None:
+        """Configure performance monitoring thresholds.
+
+        Args:
+            slow_operation_ms: Threshold for slow operations in milliseconds
+            memory_warning_mb: Memory usage warning threshold in MB
+            memory_critical_mb: Memory usage critical threshold in MB
+            low_hit_rate: Low hit rate warning threshold (0.0-1.0)
+        """
+        if slow_operation_ms is not None:
+            self._slow_operation_threshold_ms = slow_operation_ms
+        if memory_warning_mb is not None:
+            self._memory_warning_threshold_mb = memory_warning_mb
+        if memory_critical_mb is not None:
+            self._memory_critical_threshold_mb = memory_critical_mb
+        if low_hit_rate is not None:
+            self._low_hit_rate_threshold = low_hit_rate
+
+        log_service_operation(
+            logger, "InMemoryCache", "thresholds_updated",
+            slow_operation_threshold_ms=self._slow_operation_threshold_ms,
+            memory_warning_threshold_mb=self._memory_warning_threshold_mb,
+            memory_critical_threshold_mb=self._memory_critical_threshold_mb,
+            low_hit_rate_threshold=self._low_hit_rate_threshold
+        )
 
 
 class RedditCacheService:
@@ -236,13 +653,22 @@ class RedditCacheService:
 
                 # Test connection
                 self.redis_client.ping()
-                logger.info("Redis cache enabled and connected")
+                log_service_operation(
+                    logger, "RedditCacheService", "redis_connected",
+                    redis_url=redis_url or "localhost:6379"
+                )
 
             except ImportError:
-                logger.warning("Redis not available, falling back to in-memory cache")
+                log_service_operation(
+                    logger, "RedditCacheService", "redis_unavailable",
+                    fallback="in-memory", reason="import_error"
+                )
                 self.enable_redis = False
             except Exception as e:
-                logger.warning(f"Redis connection failed, falling back to in-memory cache: {e}")
+                log_error_with_context(
+                    logger, e, "RedditCacheService", "redis_connection_failed",
+                    fallback="in-memory", redis_url=redis_url
+                )
                 self.enable_redis = False
 
     def get_post(self, post_id: str) -> dict[str, Any] | None:
@@ -261,10 +687,18 @@ class RedditCacheService:
             try:
                 cached_data = self.redis_client.get(cache_key)
                 if cached_data:
-                    logger.debug(f"Redis cache hit for post: {post_id}")
+                    log_service_operation(
+                        logger, "RedditCacheService", "redis_cache_hit",
+                        cache_key=_sanitize_cache_key_for_logging(post_id),
+                        cache_type="redis"
+                    )
                     return json.loads(cached_data)  # type: ignore
             except Exception as e:
-                logger.warning(f"Redis get failed: {e}")
+                log_error_with_context(
+                    logger, e, "RedditCacheService", "redis_get_failed",
+                    cache_key=f"post:{_sanitize_cache_key_for_logging(post_id)}",
+                    level=logging.DEBUG
+                )
 
         # Fallback to in-memory cache
         return self.cache.get(cache_key)
@@ -293,9 +727,18 @@ class RedditCacheService:
                     ttl_seconds,
                     json.dumps(post_data, default=str)
                 )
-                logger.debug(f"Cached post in Redis: {post_id}")
+                log_service_operation(
+                    logger, "RedditCacheService", "redis_cache_set",
+                    cache_key=_sanitize_cache_key_for_logging(post_id),
+                    ttl_seconds=ttl_seconds,
+                    cache_type="redis"
+                )
             except Exception as e:
-                logger.warning(f"Redis set failed: {e}")
+                log_error_with_context(
+                    logger, e, "RedditCacheService", "redis_set_failed",
+                    cache_key=f"post:{_sanitize_cache_key_for_logging(post_id)}",
+                    level=logging.DEBUG
+                )
 
         # Always store in in-memory cache as fallback
         self.cache.set(cache_key, post_data, ttl)
@@ -399,9 +842,17 @@ class RedditCacheService:
         if self.enable_redis and self.redis_client:
             try:
                 self.redis_client.delete(cache_key)
-                logger.debug(f"Invalidated post in Redis: {post_id}")
+                log_service_operation(
+                    logger, "RedditCacheService", "redis_invalidation",
+                    cache_key=_sanitize_cache_key_for_logging(post_id),
+                    cache_type="redis"
+                )
             except Exception as e:
-                logger.warning(f"Redis invalidation failed: {e}")
+                log_error_with_context(
+                    logger, e, "RedditCacheService", "redis_invalidation_failed",
+                    cache_key=f"post:{_sanitize_cache_key_for_logging(post_id)}",
+                    level=logging.DEBUG
+                )
 
         # Invalidate in in-memory cache
         self.cache.delete(cache_key)
@@ -418,7 +869,11 @@ class RedditCacheService:
 
         # Invalidate check run results (pattern-based)
         # Note: This is simplified - in production, you'd want pattern matching
-        logger.info(f"Invalidated cached data for subreddit: {subreddit}")
+        log_service_operation(
+            logger, "RedditCacheService", "subreddit_invalidation",
+            subreddit=subreddit,
+            invalidated_keys=["subreddit_posts", "trending"]
+        )
 
     def get_cache_stats(self) -> dict[str, Any]:
         """Get comprehensive cache statistics.
@@ -459,8 +914,11 @@ class RedditCacheService:
                 # Redis handles TTL automatically, but we can get stats
                 redis_info = self.redis_client.info('stats')
                 redis_cleaned = redis_info.get('expired_keys', 0)
-            except Exception:
-                pass
+            except Exception as e:
+                log_error_with_context(
+                    logger, e, "RedditCacheService", "redis_stats_unavailable",
+                    level=logging.DEBUG
+                )
 
         return {
             'in_memory_expired': expired_count,
@@ -486,7 +944,13 @@ class RedditCacheService:
         # Cache the posts list too
         self.set_subreddit_posts(subreddit, posts, ttl=300)  # 5 minutes
 
-        logger.info(f"Warmed cache with {len(posts)} posts for r/{subreddit}")
+        log_service_operation(
+            logger, "RedditCacheService", "cache_warmed",
+            subreddit=subreddit,
+            posts_cached=len(posts),
+            ttl_posts=600,
+            ttl_list=300
+        )
 
     def __enter__(self) -> 'RedditCacheService':
         """Context manager entry."""

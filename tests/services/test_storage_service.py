@@ -152,7 +152,7 @@ class TestStorageServiceSavePost:
             'score': 0,
             'num_comments': 0,
             'url': 'https://reddit.com/minimal',
-            'permalink': '/r/python/minimal',
+            'permalink': '/r/python/comments/minimal/test_post/',
             'is_self': False,
             'over_18': False,
             'created_utc': datetime.now(UTC),

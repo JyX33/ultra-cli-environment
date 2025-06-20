@@ -2,12 +2,16 @@
 # ABOUTME: Compares current posts with stored data to detect new posts and engagement changes
 
 from datetime import UTC, datetime, timedelta
-import logging
 from typing import Any
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.core.structured_logging import (
+    get_logger,
+    log_error_with_context,
+    log_service_operation,
+)
 from app.models.comment import Comment
 from app.models.reddit_post import RedditPost
 from app.models.types import (
@@ -19,8 +23,8 @@ from app.models.types import (
 )
 from app.services.storage_service import StorageService
 
-# Set up logging
-logger = logging.getLogger(__name__)
+# Set up structured logging
+logger = get_logger(__name__)
 
 
 class ChangeDetectionService:
@@ -63,13 +67,19 @@ class ChangeDetectionService:
                     # Check if post exists in database
                     post_id = post_data.get('post_id')
                     if not post_id:
-                        logger.warning("Post data missing post_id, skipping")
+                        log_service_operation(
+                            logger, "ChangeDetectionService", "post_data_invalid",
+                            reason="missing_post_id", level="warning"
+                        )
                         continue
 
                     try:
                         existing_post = self.storage_service.get_post_by_id(post_id)
                     except SQLAlchemyError as db_error:
-                        logger.error(f"Database error checking post {post_id}: {db_error}")
+                        log_error_with_context(
+                            logger, db_error, "ChangeDetectionService", "post_lookup_failed",
+                            post_id=post_id
+                        )
                         continue
 
                     # If post doesn't exist in database and meets time criteria
@@ -98,19 +108,35 @@ class ChangeDetectionService:
 
                         new_posts.append(new_post)
 
-                        logger.debug(
-                            f"Found new post: {post_id} in r/{post_data.get('subreddit')}"
+                        log_service_operation(
+                            logger, "ChangeDetectionService", "new_post_found",
+                            post_id=post_id,
+                            subreddit=post_data.get('subreddit'),
+                            score=post_data.get('score', 0),
+                            comments=post_data.get('num_comments', 0)
                         )
 
                 except (KeyError, TypeError) as e:
-                    logger.warning(f"Error processing post data: {e}")
+                    log_error_with_context(
+                        logger, e, "ChangeDetectionService", "post_processing_error",
+                        post_data_available=bool(post_data)
+                    )
                     continue
 
         except SQLAlchemyError as e:
-            logger.error(f"Database error finding new posts: {e}")
+            log_error_with_context(
+                logger, e, "ChangeDetectionService", "new_posts_query_failed",
+                posts_count=len(current_posts),
+                last_check_time=last_check_time.isoformat()
+            )
             return []
 
-        logger.info(f"Found {len(new_posts)} new posts since {last_check_time}")
+        log_service_operation(
+            logger, "ChangeDetectionService", "new_posts_analysis_complete",
+            new_posts_count=len(new_posts),
+            last_check_time=last_check_time.isoformat(),
+            analyzed_posts=len(current_posts)
+        )
         return new_posts
 
     def find_updated_posts(
@@ -189,21 +215,35 @@ class ChangeDetectionService:
 
                         updated_posts.append(updated_post)
 
-                        logger.debug(
-                            f"Found updated post: {post_id} with {update_type} "
-                            f"(score: {comparison['score_delta']:+}, "
-                            f"comments: {comparison['comments_delta']:+})"
+                        log_service_operation(
+                            logger, "ChangeDetectionService", "post_update_detected",
+                            post_id=post_id,
+                            update_type=update_type,
+                            score_delta=comparison['score_delta'],
+                            comments_delta=comparison['comments_delta'],
+                            current_score=post_data.get('score', 0),
+                            current_comments=post_data.get('num_comments', 0)
                         )
 
                 except (KeyError, TypeError) as e:
-                    logger.warning(f"Error processing post update: {e}")
+                    log_error_with_context(
+                        logger, e, "ChangeDetectionService", "post_update_processing_error",
+                        post_data_available=bool(post_data)
+                    )
                     continue
 
         except SQLAlchemyError as e:
-            logger.error(f"Database error finding updated posts: {e}")
+            log_error_with_context(
+                logger, e, "ChangeDetectionService", "updated_posts_query_failed",
+                posts_count=len(current_posts)
+            )
             return []
 
-        logger.info(f"Found {len(updated_posts)} posts with engagement changes")
+        log_service_operation(
+            logger, "ChangeDetectionService", "updated_posts_analysis_complete",
+            updated_posts_count=len(updated_posts),
+            analyzed_posts=len(current_posts)
+        )
         return updated_posts
 
     def calculate_engagement_delta(
@@ -228,7 +268,11 @@ class ChangeDetectionService:
             # Get previous post data
             existing_post = self.storage_service.get_post_by_id(post_id)
             if existing_post is None:
-                logger.debug(f"No previous data for post {post_id}")
+                log_service_operation(
+                    logger, "ChangeDetectionService", "no_previous_data",
+                    post_id=post_id,
+                    level="debug"
+                )
                 return None
 
             # Calculate time span - handle timezone-aware comparisons
@@ -260,16 +304,24 @@ class ChangeDetectionService:
                 engagement_rate=engagement_rate
             )
 
-            logger.debug(
-                f"Calculated engagement delta for {post_id}: "
-                f"score {score_delta:+}, comments {comments_delta:+}, "
-                f"rate {engagement_rate:.2f}/hr"
+            log_service_operation(
+                logger, "ChangeDetectionService", "engagement_delta_calculated",
+                post_id=post_id,
+                score_delta=score_delta,
+                comments_delta=comments_delta,
+                engagement_rate=round(engagement_rate, 2),
+                time_span_hours=round(time_span_hours, 2)
             )
 
             return delta
 
         except SQLAlchemyError as e:
-            logger.error(f"Error calculating engagement delta for {post_id}: {e}")
+            log_error_with_context(
+                logger, e, "ChangeDetectionService", "engagement_delta_calculation_failed",
+                post_id=post_id,
+                current_score=current_score,
+                current_comments=current_comments
+            )
             return None
 
     def _compare_posts(
@@ -322,9 +374,12 @@ class ChangeDetectionService:
         Returns:
             ChangeDetectionResult with all detected changes
         """
-        logger.info(
-            f"Starting change detection for r/{subreddit} "
-            f"with {len(current_posts)} current posts"
+        log_service_operation(
+            logger, "ChangeDetectionService", "change_detection_started",
+            subreddit=subreddit,
+            current_posts_count=len(current_posts),
+            check_run_id=check_run_id,
+            last_check_time=last_check_time.isoformat()
         )
 
         try:
@@ -342,19 +397,26 @@ class ChangeDetectionService:
                 updated_posts=updated_posts
             )
 
-            logger.info(
-                f"Change detection completed for r/{subreddit}: "
-                f"{result.total_new_posts} new posts, "
-                f"{result.total_updated_posts} updated posts, "
-                f"{result.posts_with_significant_changes} significant changes, "
-                f"{result.trending_up_posts} trending up, "
-                f"{result.trending_down_posts} trending down"
+            log_service_operation(
+                logger, "ChangeDetectionService", "change_detection_completed",
+                subreddit=subreddit,
+                check_run_id=check_run_id,
+                total_new_posts=result.total_new_posts,
+                total_updated_posts=result.total_updated_posts,
+                significant_changes=result.posts_with_significant_changes,
+                trending_up=result.trending_up_posts,
+                trending_down=result.trending_down_posts
             )
 
             return result
 
         except Exception as e:
-            logger.error(f"Error in comprehensive change detection: {e}")
+            log_error_with_context(
+                logger, e, "ChangeDetectionService", "comprehensive_change_detection_failed",
+                subreddit=subreddit,
+                check_run_id=check_run_id,
+                current_posts_count=len(current_posts)
+            )
 
             # Return empty result on error
             return ChangeDetectionResult.from_updates(
@@ -424,11 +486,22 @@ class ChangeDetectionService:
             # Sort by engagement rate (highest first)
             trending_posts.sort(key=lambda x: x[1].engagement_rate, reverse=True)
 
-            logger.debug(f"Found {len(trending_posts)} trending posts in r/{subreddit}")
+            log_service_operation(
+                logger, "ChangeDetectionService", "trending_posts_analysis_complete",
+                subreddit=subreddit,
+                trending_posts_count=len(trending_posts),
+                min_score_delta=min_score_delta,
+                limit=limit
+            )
             return trending_posts
 
         except SQLAlchemyError as e:
-            logger.error(f"Error getting trending posts for r/{subreddit}: {e}")
+            log_error_with_context(
+                logger, e, "ChangeDetectionService", "trending_posts_query_failed",
+                subreddit=subreddit,
+                min_score_delta=min_score_delta,
+                limit=limit
+            )
             return []
 
     def find_new_comments(
@@ -454,7 +527,11 @@ class ChangeDetectionService:
             # Check if post exists by trying to get it
             post = self.session.query(RedditPost).filter(RedditPost.id == post_id).first()
             if post is None:
-                logger.debug(f"Post {post_id} does not exist, returning no new comments")
+                log_service_operation(
+                    logger, "ChangeDetectionService", "post_not_found_for_comments",
+                    post_id=post_id,
+                    level="debug"
+                )
                 return []
 
             # Create set of existing comment IDs for fast lookup
@@ -465,26 +542,51 @@ class ChangeDetectionService:
                 try:
                     comment_id = comment_data.get('comment_id')
                     if not comment_id:
-                        logger.warning("Comment data missing comment_id, skipping")
+                        log_service_operation(
+                            logger, "ChangeDetectionService", "comment_data_invalid",
+                            reason="missing_comment_id",
+                            post_id=post_id,
+                            level="warning"
+                        )
                         continue
 
                     # If comment doesn't exist in database, it's new
                     if comment_id not in existing_comment_ids:
                         new_comments.append(comment_data)
-                        logger.debug(f"Found new comment: {comment_id}")
+                        log_service_operation(
+                            logger, "ChangeDetectionService", "new_comment_found",
+                            comment_id=comment_id,
+                            post_id=post_id,
+                            score=comment_data.get('score', 0)
+                        )
 
                 except (KeyError, TypeError) as e:
-                    logger.warning(f"Error processing comment data: {e}")
+                    log_error_with_context(
+                        logger, e, "ChangeDetectionService", "comment_processing_error",
+                        post_id=post_id
+                    )
                     continue
 
-            logger.info(f"Found {len(new_comments)} new comments for post {post_id}")
+            log_service_operation(
+                logger, "ChangeDetectionService", "new_comments_analysis_complete",
+                post_id=post_id,
+                new_comments_count=len(new_comments),
+                analyzed_comments=len(current_comments)
+            )
             return new_comments
 
         except SQLAlchemyError as e:
-            logger.error(f"Database error finding new comments for post {post_id}: {e}")
+            log_error_with_context(
+                logger, e, "ChangeDetectionService", "new_comments_query_failed",
+                post_id=post_id,
+                comments_count=len(current_comments)
+            )
             return []
         except Exception as e:
-            logger.error(f"Unexpected error finding new comments for post {post_id}: {e}")
+            log_error_with_context(
+                logger, e, "ChangeDetectionService", "new_comments_unexpected_error",
+                post_id=post_id
+            )
             return []
 
     def find_updated_comments(
@@ -509,7 +611,11 @@ class ChangeDetectionService:
             # For nonexistent posts, we should return empty list
             post = self.session.query(RedditPost).filter(RedditPost.id == post_id).first()
             if post is None:
-                logger.debug(f"Post {post_id} does not exist, returning no updated comments")
+                log_service_operation(
+                    logger, "ChangeDetectionService", "post_not_found_for_updated_comments",
+                    post_id=post_id,
+                    level="debug"
+                )
                 return []
 
             # Create mapping of existing comments by comment_id
@@ -543,23 +649,42 @@ class ChangeDetectionService:
 
                         updated_comments.append(updated_comment)
 
-                        logger.debug(
-                            f"Found updated comment: {comment_id} with score change "
-                            f"{score_delta:+} ({existing_score} -> {current_score})"
+                        log_service_operation(
+                            logger, "ChangeDetectionService", "comment_update_detected",
+                            comment_id=comment_id,
+                            post_id=post_id,
+                            score_delta=score_delta,
+                            previous_score=existing_score,
+                            current_score=current_score
                         )
 
                 except (KeyError, TypeError) as e:
-                    logger.warning(f"Error processing comment update: {e}")
+                    log_error_with_context(
+                        logger, e, "ChangeDetectionService", "comment_update_processing_error",
+                        post_id=post_id
+                    )
                     continue
 
-            logger.info(f"Found {len(updated_comments)} updated comments for post {post_id}")
+            log_service_operation(
+                logger, "ChangeDetectionService", "updated_comments_analysis_complete",
+                post_id=post_id,
+                updated_comments_count=len(updated_comments),
+                analyzed_comments=len(current_comments)
+            )
             return updated_comments
 
         except SQLAlchemyError as e:
-            logger.error(f"Database error finding updated comments for post {post_id}: {e}")
+            log_error_with_context(
+                logger, e, "ChangeDetectionService", "updated_comments_query_failed",
+                post_id=post_id,
+                comments_count=len(current_comments)
+            )
             return []
         except Exception as e:
-            logger.error(f"Unexpected error finding updated comments for post {post_id}: {e}")
+            log_error_with_context(
+                logger, e, "ChangeDetectionService", "updated_comments_unexpected_error",
+                post_id=post_id
+            )
             return []
 
     def get_comment_tree_changes(self, post_id: int) -> dict[str, Any]:
@@ -614,10 +739,13 @@ class ChangeDetectionService:
                 'max_depth': max_depth
             }
 
-            logger.debug(
-                f"Comment tree analysis for post {post_id}: "
-                f"{total_comments} total, {top_level_count} top-level, "
-                f"{total_replies} replies, max depth {max_depth}"
+            log_service_operation(
+                logger, "ChangeDetectionService", "comment_tree_analysis_complete",
+                post_id=post_id,
+                total_comments=total_comments,
+                top_level_count=top_level_count,
+                total_replies=total_replies,
+                max_depth=max_depth
             )
 
             return {
@@ -627,7 +755,10 @@ class ChangeDetectionService:
             }
 
         except SQLAlchemyError as e:
-            logger.error(f"Database error analyzing comment tree for post {post_id}: {e}")
+            log_error_with_context(
+                logger, e, "ChangeDetectionService", "comment_tree_analysis_failed",
+                post_id=post_id
+            )
             return {
                 'post_id': post_id,
                 'total_stored_comments': 0,
@@ -638,7 +769,10 @@ class ChangeDetectionService:
                 }
             }
         except Exception as e:
-            logger.error(f"Unexpected error analyzing comment tree for post {post_id}: {e}")
+            log_error_with_context(
+                logger, e, "ChangeDetectionService", "comment_tree_unexpected_error",
+                post_id=post_id
+            )
             return {
                 'post_id': post_id,
                 'total_stored_comments': 0,
@@ -775,16 +909,22 @@ class ChangeDetectionService:
                 'score_change_distribution': score_changes
             }
 
-            logger.debug(
-                f"Comment metrics for post {post_id}: "
-                f"{total_new_comments} new, {len(updated_comments)} updated, "
-                f"avg score change {average_score_change:.2f}"
+            log_service_operation(
+                logger, "ChangeDetectionService", "comment_metrics_calculated",
+                post_id=post_id,
+                total_new_comments=total_new_comments,
+                total_updated_comments=len(updated_comments),
+                average_score_change=round(average_score_change, 2)
             )
 
             return metrics
 
         except Exception as e:
-            logger.error(f"Error calculating comment metrics for post {post_id}: {e}")
+            log_error_with_context(
+                logger, e, "ChangeDetectionService", "comment_metrics_calculation_failed",
+                post_id=post_id,
+                current_comments_count=len(current_comments)
+            )
             return {
                 'post_id': post_id,
                 'total_new_comments': 0,
@@ -917,7 +1057,11 @@ class ChangeDetectionService:
             )
 
         except Exception as e:
-            logger.error(f"Error calculating subreddit trends for r/{subreddit}: {e}")
+            log_error_with_context(
+                logger, e, "ChangeDetectionService", "subreddit_trends_calculation_failed",
+                subreddit=subreddit,
+                analysis_days=days
+            )
             # Return default empty trend data on error
             return TrendData(
                 subreddit=subreddit,
@@ -1021,7 +1165,10 @@ class ChangeDetectionService:
             return ActivityPattern.STEADY
 
         except Exception as e:
-            logger.error(f"Error detecting activity patterns for r/{subreddit}: {e}")
+            log_error_with_context(
+                logger, e, "ChangeDetectionService", "activity_patterns_detection_failed",
+                subreddit=subreddit
+            )
             return ActivityPattern.DORMANT
 
     def calculate_best_post_time(self, subreddit: str) -> int:
@@ -1065,11 +1212,19 @@ class ChangeDetectionService:
             # Return hour with highest average engagement
             best_hour = max(hourly_averages, key=lambda hour: hourly_averages[hour])
 
-            logger.debug(f"Best posting hour for r/{subreddit}: {best_hour}:00")
+            log_service_operation(
+                logger, "ChangeDetectionService", "best_posting_hour_calculated",
+                subreddit=subreddit,
+                best_hour=best_hour,
+                data_points=len(hourly_averages)
+            )
             return best_hour
 
         except Exception as e:
-            logger.error(f"Error calculating best post time for r/{subreddit}: {e}")
+            log_error_with_context(
+                logger, e, "ChangeDetectionService", "best_post_time_calculation_failed",
+                subreddit=subreddit
+            )
             return 12  # Default to noon
 
     def get_engagement_forecast(self, subreddit: str) -> dict[str, float]:
@@ -1160,11 +1315,13 @@ class ChangeDetectionService:
             # Higher confidence for more consistent data
             confidence = max(0.1, min(0.9, 1.0 - coefficient_of_variation / 2))
 
-            logger.debug(
-                f"Engagement forecast for r/{subreddit}: "
-                f"{predicted_posts:.1f} posts/day, "
-                f"{predicted_engagement:.1f} avg engagement, "
-                f"{confidence:.2f} confidence"
+            log_service_operation(
+                logger, "ChangeDetectionService", "engagement_forecast_generated",
+                subreddit=subreddit,
+                predicted_daily_posts=round(predicted_posts, 1),
+                predicted_daily_engagement=round(predicted_engagement, 1),
+                trend_confidence=round(confidence, 2),
+                data_days=len(daily_data)
             )
 
             return {
@@ -1174,7 +1331,10 @@ class ChangeDetectionService:
             }
 
         except Exception as e:
-            logger.error(f"Error generating engagement forecast for r/{subreddit}: {e}")
+            log_error_with_context(
+                logger, e, "ChangeDetectionService", "engagement_forecast_failed",
+                subreddit=subreddit
+            )
             return {
                 'predicted_daily_posts': 0.0,
                 'predicted_daily_engagement': 0.0,
@@ -1223,5 +1383,8 @@ class ChangeDetectionService:
             return peak_periods
 
         except Exception as e:
-            logger.error(f"Error identifying peak periods: {e}")
+            log_error_with_context(
+                logger, e, "ChangeDetectionService", "peak_periods_identification_failed",
+                posts_count=len(posts)
+            )
             return []

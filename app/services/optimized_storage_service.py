@@ -10,13 +10,19 @@ from sqlalchemy import and_, desc, func, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.structured_logging import (
+    get_logger,
+    log_error_with_context,
+    log_service_operation,
+)
 from app.models.check_run import CheckRun
 from app.models.comment import Comment
 from app.models.reddit_post import RedditPost
-from app.services.storage_service import StorageService
+from app.services.performance_monitoring_service import PerformanceMonitoringService
+from app.services.storage_service import StorageService, database_operation_monitor
 
-# Set up logging
-logger = logging.getLogger(__name__)
+# Set up structured logging
+logger = get_logger(__name__)
 
 
 class OptimizedStorageService(StorageService):
@@ -29,13 +35,14 @@ class OptimizedStorageService(StorageService):
     - Performance monitoring hooks
     """
 
-    def __init__(self, session: Session) -> None:
-        """Initialize OptimizedStorageService with database session.
+    def __init__(self, session: Session, performance_monitor: PerformanceMonitoringService | None = None) -> None:
+        """Initialize OptimizedStorageService with database session and performance monitoring.
 
         Args:
             session: SQLAlchemy session for database operations
+            performance_monitor: Optional performance monitoring service for query tracking
         """
-        super().__init__(session)
+        super().__init__(session, performance_monitor)
         self._query_count = 0
         self._cache: dict[str, Any] = {}
         self._enable_query_logging = False
@@ -48,7 +55,10 @@ class OptimizedStorageService(StorageService):
         """
         self._enable_query_logging = enabled
         if enabled:
-            logger.info("Query logging enabled for performance analysis")
+            log_service_operation(
+                logger, "OptimizedStorageService", "query_logging_enabled",
+                performance_analysis=True
+            )
 
     def get_query_count(self) -> int:
         """Get the number of queries executed in this session.
@@ -70,8 +80,14 @@ class OptimizedStorageService(StorageService):
         """
         self._query_count += 1
         if self._enable_query_logging:
-            logger.debug(f"Query #{self._query_count}: {query_description}")
+            log_service_operation(
+                logger, "OptimizedStorageService", "query_executed",
+                query_number=self._query_count,
+                query_description=query_description,
+                level=logging.DEBUG
+            )
 
+    @database_operation_monitor("get_posts_with_comments_optimized")
     def get_posts_with_comments_optimized(
         self,
         subreddit: str,
@@ -109,15 +125,23 @@ class OptimizedStorageService(StorageService):
 
             posts = query.all()
 
-            logger.info(
-                f"Retrieved {len(posts)} posts with comments for r/{subreddit} "
-                f"using optimized query"
+            log_service_operation(
+                logger, "OptimizedStorageService", "posts_with_comments_retrieved",
+                subreddit=subreddit,
+                posts_count=len(posts),
+                optimization="eager_loading",
+                with_snapshots=with_snapshots
             )
 
             return posts
 
         except SQLAlchemyError as e:
-            logger.error(f"Failed to get optimized posts with comments: {e}")
+            log_error_with_context(
+                logger, e, "OptimizedStorageService", "get_posts_with_comments_failed",
+                subreddit=subreddit,
+                limit=limit,
+                with_snapshots=with_snapshots
+            )
             raise RuntimeError(f"Failed to get posts with comments: {e}") from e
 
     def get_check_run_with_posts_optimized(self, check_run_id: int) -> CheckRun | None:
@@ -140,17 +164,23 @@ class OptimizedStorageService(StorageService):
             )
 
             if check_run:
-                logger.info(
-                    f"Retrieved check run {check_run_id} with {len(check_run.reddit_posts)} posts "
-                    f"using optimized query"
+                log_service_operation(
+                    logger, "OptimizedStorageService", "check_run_with_posts_retrieved",
+                    check_run_id=check_run_id,
+                    posts_count=len(check_run.reddit_posts),
+                    optimization="eager_loading"
                 )
 
             return check_run
 
         except SQLAlchemyError as e:
-            logger.error(f"Failed to get optimized check run: {e}")
+            log_error_with_context(
+                logger, e, "OptimizedStorageService", "get_check_run_with_posts_failed",
+                check_run_id=check_run_id
+            )
             raise RuntimeError(f"Failed to get check run with posts: {e}") from e
 
+    @database_operation_monitor("bulk_get_posts_by_ids")
     def bulk_get_posts_by_ids(self, post_ids: list[str]) -> dict[str, RedditPost]:
         """Efficiently retrieve multiple posts by their IDs.
 
@@ -179,12 +209,20 @@ class OptimizedStorageService(StorageService):
             # Convert to dictionary for O(1) lookup
             posts_dict = {post.post_id: post for post in posts}
 
-            logger.info(f"Retrieved {len(posts)} posts in single bulk query")
+            log_service_operation(
+                logger, "OptimizedStorageService", "bulk_posts_retrieved",
+                requested_count=len(post_ids),
+                retrieved_count=len(posts),
+                optimization="bulk_query"
+            )
 
             return posts_dict
 
         except SQLAlchemyError as e:
-            logger.error(f"Failed to bulk get posts: {e}")
+            log_error_with_context(
+                logger, e, "OptimizedStorageService", "bulk_get_posts_failed",
+                post_ids_count=len(post_ids)
+            )
             raise RuntimeError(f"Failed to bulk get posts: {e}") from e
 
     def get_posts_with_statistics(
@@ -241,17 +279,27 @@ class OptimizedStorageService(StorageService):
                     'engagement_ratio': (comment_count or 0) / max(post.score, 1)
                 })
 
-            logger.info(
-                f"Retrieved {len(posts_with_stats)} posts with statistics "
-                f"using efficient aggregation"
+            log_service_operation(
+                logger, "OptimizedStorageService", "posts_with_statistics_retrieved",
+                subreddit=subreddit,
+                posts_count=len(posts_with_stats),
+                optimization="database_aggregation",
+                start_date=start_date.isoformat() if start_date else None,
+                end_date=end_date.isoformat() if end_date else None
             )
 
             return posts_with_stats
 
         except SQLAlchemyError as e:
-            logger.error(f"Failed to get posts with statistics: {e}")
+            log_error_with_context(
+                logger, e, "OptimizedStorageService", "get_posts_with_statistics_failed",
+                subreddit=subreddit,
+                start_date=start_date.isoformat() if start_date else None,
+                end_date=end_date.isoformat() if end_date else None
+            )
             raise RuntimeError(f"Failed to get posts with statistics: {e}") from e
 
+    @database_operation_monitor("get_trending_posts_optimized")
     def get_trending_posts_optimized(
         self,
         subreddit: str,
@@ -270,12 +318,9 @@ class OptimizedStorageService(StorageService):
         """
         self._log_query(f"get_trending_posts_optimized(subreddit={subreddit})")
 
-        # Enable query logging for debugging
-        self.enable_query_logging(True)
 
         try:
             cutoff_time = datetime.now(UTC) - timedelta(hours=time_window_hours)
-            logger.debug(f"Cutoff time: {cutoff_time}, time_window_hours: {time_window_hours}")
 
             # Use subquery to calculate engagement metrics efficiently
             # PostgreSQL-compatible age calculation
@@ -340,29 +385,39 @@ class OptimizedStorageService(StorageService):
             # Convert to dictionaries
             results = []
             for row in trending_posts:
-                # Debug null values
-                logger.debug(f"Row values: post_id={row.post_id}, score={row.score}, age_seconds={row.age_seconds}, trending_score={row.trending_score}")
 
                 # Handle potential None values safely
-                age_seconds = row.age_seconds if row.age_seconds is not None else 0
-                age_hours = age_seconds / 3600
-                trending_score = row.trending_score if row.trending_score is not None else 0.0
+                age_seconds: int | float = row.age_seconds if row.age_seconds is not None else 0
+                post_age_hours: float = float(age_seconds) / 3600.0
+                trending_score: float = float(row.trending_score) if row.trending_score is not None else 0.0
 
                 results.append({
                     'post_id': row.post_id,
                     'score': row.score or 0,
                     'num_comments': row.num_comments or 0,
                     'actual_comments': row.actual_comments or 0,
-                    'age_hours': age_hours,
+                    'age_hours': post_age_hours,
                     'trending_score': float(trending_score)
                 })
 
-            logger.info(f"Found {len(results)} trending posts using optimized query")
+            log_service_operation(
+                logger, "OptimizedStorageService", "trending_posts_retrieved",
+                subreddit=subreddit,
+                trending_posts_count=len(results),
+                time_window_hours=time_window_hours,
+                min_score=min_score,
+                optimization="subquery_aggregation"
+            )
 
             return results
 
         except SQLAlchemyError as e:
-            logger.error(f"Failed to get trending posts: {e}")
+            log_error_with_context(
+                logger, e, "OptimizedStorageService", "get_trending_posts_failed",
+                subreddit=subreddit,
+                time_window_hours=time_window_hours,
+                min_score=min_score
+            )
             raise RuntimeError(f"Failed to get trending posts: {e}") from e
 
     def analyze_query_performance(self) -> dict[str, Any]:
@@ -393,7 +448,10 @@ class OptimizedStorageService(StorageService):
                 }
 
         except SQLAlchemyError as e:
-            logger.warning(f"Could not analyze query performance: {e}")
+            log_error_with_context(
+                logger, e, "OptimizedStorageService", "query_performance_analysis_failed",
+                level="warning"
+            )
             return {
                 'query_count': self._query_count,
                 'analysis_error': str(e)
@@ -418,14 +476,20 @@ class OptimizedStorageService(StorageService):
                 self.session.execute(text("ANALYZE"))
                 optimizations_applied.append("SQLite ANALYZE")
 
-                logger.info("Applied SQLite performance optimizations")
+                log_service_operation(
+                    logger, "OptimizedStorageService", "sqlite_optimizations_applied",
+                    optimizations=optimizations_applied
+                )
 
             else:
                 # PostgreSQL optimizations would go here
                 self.session.execute(text("VACUUM ANALYZE"))
                 optimizations_applied.append("PostgreSQL VACUUM ANALYZE")
 
-                logger.info("Applied PostgreSQL performance optimizations")
+                log_service_operation(
+                    logger, "OptimizedStorageService", "postgresql_optimizations_applied",
+                    optimizations=optimizations_applied
+                )
 
             return {
                 'success': True,
@@ -433,7 +497,10 @@ class OptimizedStorageService(StorageService):
             }
 
         except SQLAlchemyError as e:
-            logger.error(f"Failed to apply performance optimizations: {e}")
+            log_error_with_context(
+                logger, e, "OptimizedStorageService", "performance_optimizations_failed",
+                optimizations_applied=optimizations_applied
+            )
             return {
                 'success': False,
                 'error': str(e),
@@ -477,12 +544,12 @@ class OptimizedStorageService(StorageService):
                 yield comments_batch
                 offset += batch_size
 
-                # Optional: Force garbage collection between batches
-                import gc
-                gc.collect()
-
         except SQLAlchemyError as e:
-            logger.error(f"Failed to stream comments: {e}")
+            log_error_with_context(
+                logger, e, "OptimizedStorageService", "comment_streaming_failed",
+                post_id=post_id,
+                batch_size=batch_size
+            )
             raise RuntimeError(f"Failed to stream comments: {e}") from e
 
     def batch_update_post_scores(
@@ -522,13 +589,21 @@ class OptimizedStorageService(StorageService):
 
             self.session.commit()
 
-            logger.info(f"Batch updated {updated_count} post scores")
+            log_service_operation(
+                logger, "OptimizedStorageService", "batch_update_scores_completed",
+                requested_updates=len(score_updates),
+                successful_updates=updated_count,
+                optimization="bulk_update"
+            )
 
             return updated_count
 
         except SQLAlchemyError as e:
             self.session.rollback()
-            logger.error(f"Failed to batch update post scores: {e}")
+            log_error_with_context(
+                logger, e, "OptimizedStorageService", "batch_update_scores_failed",
+                requested_updates=len(score_updates)
+            )
             raise RuntimeError(f"Failed to batch update scores: {e}") from e
 
     def get_performance_report(self) -> dict[str, Any]:
@@ -566,7 +641,9 @@ class OptimizedStorageService(StorageService):
             }
 
         except SQLAlchemyError as e:
-            logger.error(f"Failed to generate performance report: {e}")
+            log_error_with_context(
+                logger, e, "OptimizedStorageService", "performance_report_generation_failed"
+            )
             return {
                 'error': str(e),
                 'generated_at': datetime.now(UTC).isoformat()

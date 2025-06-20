@@ -71,7 +71,7 @@ def sample_current_posts():
             'score': 50,
             'num_comments': 5,
             'url': 'https://reddit.com/new1',
-            'permalink': '/r/python/new1',
+            'permalink': '/r/python/comments/new1/test_post/',
             'is_self': True,
             'over_18': False,
             'created_utc': base_time - timedelta(hours=2),
@@ -85,7 +85,7 @@ def sample_current_posts():
             'score': 150,  # Changed from 100
             'num_comments': 25,  # Changed from 20
             'url': 'https://reddit.com/existing1',
-            'permalink': '/r/python/existing1',
+            'permalink': '/r/python/comments/existing1/test_post/',
             'is_self': True,
             'over_18': False,
             'created_utc': base_time - timedelta(hours=6),
@@ -99,7 +99,7 @@ def sample_current_posts():
             'score': 75,  # Same as before
             'num_comments': 10,  # Same as before
             'url': 'https://reddit.com/existing2',
-            'permalink': '/r/python/existing2',
+            'permalink': '/r/python/comments/existing2/test_post/',
             'is_self': True,
             'over_18': False,
             'created_utc': base_time - timedelta(hours=8),
@@ -126,7 +126,7 @@ def existing_stored_posts(storage_service):
             'score': 100,  # Will change to 150
             'num_comments': 20,  # Will change to 25
             'url': 'https://reddit.com/existing1',
-            'permalink': '/r/python/existing1',
+            'permalink': '/r/python/comments/existing1/test_post/',
             'is_self': True,
             'over_18': False,
             'created_utc': base_time - timedelta(hours=6),
@@ -141,7 +141,7 @@ def existing_stored_posts(storage_service):
             'score': 75,  # Same
             'num_comments': 10,  # Same
             'url': 'https://reddit.com/existing2',
-            'permalink': '/r/python/existing2',
+            'permalink': '/r/python/comments/existing2/test_post/',
             'is_self': True,
             'over_18': False,
             'created_utc': base_time - timedelta(hours=8),
@@ -203,7 +203,7 @@ class TestChangeDetectionServiceNewPosts:
                 'score': 100,
                 'num_comments': 20,
                 'url': 'https://reddit.com/existing1',
-                'permalink': '/r/python/existing1',
+                'permalink': '/r/python/comments/existing1/test_post/',
                 'is_self': True,
                 'over_18': False,
                 'created_utc': datetime.now(UTC) - timedelta(hours=6),
@@ -235,7 +235,7 @@ class TestChangeDetectionServiceNewPosts:
                 'title': 'Minimal Post',
                 'author': None,  # Missing author
                 'url': 'https://reddit.com/minimal',
-                'permalink': '/r/python/minimal',
+                'permalink': '/r/python/comments/minimal/test_post/',
                 'is_self': True,
                 'over_18': False,
                 'created_utc': datetime.now(UTC) - timedelta(minutes=30),
@@ -286,7 +286,7 @@ class TestChangeDetectionServiceUpdatedPosts:
                 'score': 120,  # Changed from 100
                 'num_comments': 20,  # Same
                 'url': 'https://reddit.com/existing1',
-                'permalink': '/r/python/existing1',
+                'permalink': '/r/python/comments/existing1/test_post/',
                 'is_self': True,
                 'over_18': False,
                 'created_utc': datetime.now(UTC) - timedelta(hours=6),
@@ -314,7 +314,7 @@ class TestChangeDetectionServiceUpdatedPosts:
                 'score': 100,  # Same
                 'num_comments': 30,  # Changed from 20
                 'url': 'https://reddit.com/existing1',
-                'permalink': '/r/python/existing1',
+                'permalink': '/r/python/comments/existing1/test_post/',
                 'is_self': True,
                 'over_18': False,
                 'created_utc': datetime.now(UTC) - timedelta(hours=6),
@@ -343,7 +343,7 @@ class TestChangeDetectionServiceUpdatedPosts:
                 'score': 100,  # Same as stored
                 'num_comments': 20,  # Same as stored
                 'url': 'https://reddit.com/existing1',
-                'permalink': '/r/python/existing1',
+                'permalink': '/r/python/comments/existing1/test_post/',
                 'is_self': True,
                 'over_18': False,
                 'created_utc': datetime.now(UTC) - timedelta(hours=6),
@@ -367,7 +367,7 @@ class TestChangeDetectionServiceUpdatedPosts:
                 'score': 50,
                 'num_comments': 5,
                 'url': 'https://reddit.com/unknown',
-                'permalink': '/r/python/unknown',
+                'permalink': '/r/python/comments/unknown/test_post/',
                 'is_self': True,
                 'over_18': False,
                 'created_utc': datetime.now(UTC) - timedelta(hours=2),
@@ -551,7 +551,7 @@ class TestChangeDetectionServicePerformance:
                 'score': i * 10,
                 'num_comments': i * 2,
                 'url': f'https://reddit.com/perf_{i}',
-                'permalink': f'/r/python/perf_{i}',
+                'permalink': f'/r/python/comments/perf_{i}/test_post/',
                 'is_self': True,
                 'over_18': False,
                 'created_utc': base_time - timedelta(minutes=i),
@@ -590,7 +590,7 @@ class TestChangeDetectionServicePerformance:
                 'score': i * 10,
                 'num_comments': i * 2,
                 'url': f'https://reddit.com/stored_{i}',
-                'permalink': f'/r/python/stored_{i}',
+                'permalink': f'/r/python/comments/stored_{i}/test_post/',
                 'is_self': True,
                 'over_18': False,
                 'created_utc': base_time - timedelta(hours=i),
@@ -610,7 +610,7 @@ class TestChangeDetectionServicePerformance:
                 'score': (i * 10) + (i % 10),  # Slight score changes
                 'num_comments': (i * 2) + (i % 5),  # Slight comment changes
                 'url': f'https://reddit.com/stored_{i}',
-                'permalink': f'/r/python/stored_{i}',
+                'permalink': f'/r/python/comments/stored_{i}/test_post/',
                 'is_self': True,
                 'over_18': False,
                 'created_utc': base_time - timedelta(hours=i),

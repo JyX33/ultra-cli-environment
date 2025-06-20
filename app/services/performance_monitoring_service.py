@@ -10,15 +10,27 @@ import threading
 import time
 from typing import Any
 
+from app.core.structured_logging import (
+    get_logger,
+    log_error_with_context,
+    log_service_operation,
+)
+
 try:
     import psutil
     PSUTIL_AVAILABLE = True
 except ImportError:
     PSUTIL_AVAILABLE = False
-    logging.warning("psutil not available - system metrics will be limited")
 
-# Set up logging
-logger = logging.getLogger(__name__)
+# Set up structured logging
+logger = get_logger(__name__)
+
+# Log psutil availability after logger is initialized
+if not PSUTIL_AVAILABLE:
+    log_service_operation(
+        logger, "PerformanceMonitoringService", "psutil_unavailable",
+        fallback="limited_system_metrics", level=logging.WARNING
+    )
 
 
 @dataclass
@@ -126,7 +138,13 @@ class PerformanceMonitoringService:
         self.cache_hits = 0
         self.cache_misses = 0
 
-        logger.info("Performance monitoring service initialized")
+        log_service_operation(
+            logger, "PerformanceMonitoringService", "service_initialized",
+            max_metrics_history=max_metrics_history,
+            enable_system_monitoring=enable_system_monitoring,
+            monitoring_interval_seconds=monitoring_interval_seconds,
+            psutil_available=PSUTIL_AVAILABLE
+        )
 
     def set_thresholds(self, **kwargs: Any) -> None:
         """Update performance thresholds.
@@ -137,7 +155,11 @@ class PerformanceMonitoringService:
         for key, value in kwargs.items():
             if hasattr(self.thresholds, key):
                 setattr(self.thresholds, key, value)
-                logger.info(f"Updated threshold {key} to {value}")
+                log_service_operation(
+                    logger, "PerformanceMonitoringService", "threshold_updated",
+                    threshold_name=key,
+                    new_value=value
+                )
 
     def record_metric(
         self,
@@ -292,11 +314,17 @@ class PerformanceMonitoringService:
                     network = psutil.net_io_counters()
                     metrics['network_bytes_sent'] = network.bytes_sent
                     metrics['network_bytes_recv'] = network.bytes_recv
-                except Exception:
-                    pass  # Network stats may not be available
+                except Exception as e:
+                    log_service_operation(
+                        logger, "PerformanceMonitoringService", "network_stats_unavailable",
+                        reason=str(e), level=logging.DEBUG
+                    )
 
             except Exception as e:
-                logger.warning(f"Error collecting system metrics: {e}")
+                log_error_with_context(
+                    logger, e, "PerformanceMonitoringService", "system_metrics_collection_failed",
+                    level="warning"
+                )
 
         return metrics
 
@@ -309,7 +337,11 @@ class PerformanceMonitoringService:
         self._monitoring_thread = threading.Thread(target=self._monitoring_loop, daemon=True)
         self._monitoring_thread.start()
 
-        logger.info("Background system monitoring started")
+        log_service_operation(
+            logger, "PerformanceMonitoringService", "background_monitoring_started",
+            monitoring_interval_seconds=self.monitoring_interval,
+            enable_system_monitoring=self.enable_system_monitoring
+        )
 
     def stop_monitoring(self) -> None:
         """Stop background system monitoring."""
@@ -317,7 +349,9 @@ class PerformanceMonitoringService:
         if self._monitoring_thread:
             self._monitoring_thread.join(timeout=5.0)
 
-        logger.info("Background system monitoring stopped")
+        log_service_operation(
+            logger, "PerformanceMonitoringService", "background_monitoring_stopped"
+        )
 
     def get_performance_summary(self) -> dict[str, Any]:
         """Get comprehensive performance summary.
@@ -431,7 +465,12 @@ class PerformanceMonitoringService:
             self.cache_misses = 0
             self.alerts.clear()
 
-        logger.info("Performance counters reset")
+        log_service_operation(
+            logger, "PerformanceMonitoringService", "performance_counters_reset",
+            previous_request_count=self.request_count,
+            previous_database_query_count=self.database_query_count,
+            previous_alerts_count=len(self.alerts)
+        )
 
     def export_metrics(self, format_type: str = "json") -> str | dict[str, Any]:
         """Export metrics in specified format.
@@ -469,7 +508,10 @@ class PerformanceMonitoringService:
                 time.sleep(self.monitoring_interval)
 
             except Exception as e:
-                logger.error(f"Error in monitoring loop: {e}")
+                log_error_with_context(
+                    logger, e, "PerformanceMonitoringService", "monitoring_loop_error",
+                    monitoring_interval_seconds=self.monitoring_interval
+                )
                 time.sleep(self.monitoring_interval)
 
     def _update_metric_summary(self, metric: PerformanceMetric) -> None:
@@ -559,7 +601,15 @@ class PerformanceMonitoringService:
         if len(self.alerts) > 100:
             self.alerts = self.alerts[-100:]
 
-        logger.warning(f"Performance alert: {message}")
+        log_service_operation(
+            logger, "PerformanceMonitoringService", "performance_alert_created",
+            metric_name=metric_name,
+            current_value=current_value,
+            threshold_value=threshold_value,
+            severity=severity,
+            alert_message=message,
+            level=logging.WARNING
+        )
 
     def __enter__(self) -> 'PerformanceMonitoringService':
         """Context manager entry."""

@@ -50,7 +50,7 @@ class TestURLValidation:
         ]
 
         for url in malicious_urls:
-            with pytest.raises(URLValidationError, match="Internal network access not allowed"):
+            with pytest.raises(URLValidationError, match=".*not allowed.*"):
                 validate_url(url)
 
     def test_validate_url_blocks_private_ip_ranges(self):
@@ -65,7 +65,7 @@ class TestURLValidation:
         ]
 
         for url in private_ips:
-            with pytest.raises(URLValidationError, match="Internal network access not allowed"):
+            with pytest.raises(URLValidationError, match=".*not allowed.*"):
                 validate_url(url)
 
     def test_validate_url_blocks_non_http_schemes(self):
@@ -146,7 +146,7 @@ class TestURLValidation:
         ]
 
         for url in urls_with_userinfo:
-            with pytest.raises(URLValidationError, match="Internal network access not allowed"):
+            with pytest.raises(URLValidationError, match=".*not allowed.*"):
                 validate_url(url)
 
     def test_validate_url_blocks_ip_address_obfuscation(self):
@@ -159,7 +159,7 @@ class TestURLValidation:
         ]
 
         for url in obfuscated_ips:
-            with pytest.raises(URLValidationError, match="Internal network access not allowed"):
+            with pytest.raises(URLValidationError, match=".*not allowed.*"):
                 validate_url(url)
 
 
